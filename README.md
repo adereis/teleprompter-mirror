@@ -49,7 +49,7 @@ Optionally disable Wi-Fi on the tablet to force all traffic over USB.
 ### Tuning
 
 The cast page is configured for video call mirroring:
-- H264 preferred (hardware-accelerated encode/decode)
+- VP8 preferred (Chrome's libvpx encoder is optimized for real-time WebRTC)
 - 8 Mbps max bitrate (high quality on LAN)
 - 60 fps capture, `contentHint = 'motion'` (smooth faces over sharp text)
 - `degradationPreference = 'maintain-resolution'`

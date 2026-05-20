@@ -75,14 +75,15 @@ async function startCast() {
     });
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
 
-    // Prefer H264 (hardware-accelerated on most GPUs)
+    // Prefer VP8 — Chrome's libvpx is optimized for real-time WebRTC
+    // and outperforms OpenH264 in software encoding (common on Linux)
     const txc = pc.getTransceivers()[0];
     if (txc && txc.setCodecPreferences) {
       const caps = RTCRtpSender.getCapabilities('video');
       if (caps) {
-        const h264 = caps.codecs.filter(c => c.mimeType === 'video/H264');
-        const rest = caps.codecs.filter(c => c.mimeType !== 'video/H264');
-        if (h264.length) txc.setCodecPreferences([...h264, ...rest]);
+        const vp8 = caps.codecs.filter(c => c.mimeType === 'video/VP8');
+        const rest = caps.codecs.filter(c => c.mimeType !== 'video/VP8');
+        if (vp8.length) txc.setCodecPreferences([...vp8, ...rest]);
       }
     }
 
