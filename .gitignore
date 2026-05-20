@@ -1,0 +1,5 @@
+rdp-tls.crt
+rdp-tls.key
+.envrc
+.venv/
+__pycache__/

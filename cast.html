@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cast — Window Mirror</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2em; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #fff; margin-bottom: 0.3em; }
+  p.sub { color: #888; margin-top: 0; }
+  button {
+    padding: 10px 20px; font-size: 15px; cursor: pointer;
+    background: #0f3460; color: #fff; border: none; border-radius: 6px;
+    margin-right: 8px;
+  }
+  button:hover { background: #1a4a8a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #preview {
+    margin-top: 1em; max-width: 640px; width: 100%;
+    background: #000; border-radius: 4px; display: none;
+  }
+  #status { margin-top: 1em; font-size: 14px; }
+  .ok { color: #4ecca3; }
+  .wait { color: #f0a500; }
+  .err { color: #e74c3c; }
+</style>
+</head>
+<body>
+  <h1>Cast</h1>
+  <p class="sub">Select a window to share — the tablet viewer will mirror it.</p>
+  <button id="startBtn" onclick="startCast()">Share Window</button>
+  <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
+  <video id="preview" autoplay muted playsinline></video>
+  <div id="status"></div>
+<script>
+let pc = null, stream = null;
+
+function status(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+
+async function waitForIce(conn) {
+  if (conn.iceGatheringState === 'complete') return;
+  return new Promise(resolve => {
+    const t = setTimeout(resolve, 5000);
+    conn.onicegatheringstatechange = () => {
+      if (conn.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+    };
+  });
+}
+
+async function startCast() {
+  try {
+    await fetch('/reset', {method: 'POST'});
+    status('Select a window to share…', 'wait');
+
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {cursor: 'always', frameRate: {ideal: 60, max: 60}},
+      audio: false
+    });
+
+    const preview = document.getElementById('preview');
+    preview.srcObject = stream;
+    preview.style.display = 'block';
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+
+    const vtrack = stream.getVideoTracks()[0];
+    vtrack.onended = () => stopCast();
+    vtrack.contentHint = 'motion';
+
+    pc = new RTCPeerConnection({
+      iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+    });
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+    // Prefer H264 (hardware-accelerated on most GPUs)
+    const txc = pc.getTransceivers()[0];
+    if (txc && txc.setCodecPreferences) {
+      const caps = RTCRtpSender.getCapabilities('video');
+      if (caps) {
+        const h264 = caps.codecs.filter(c => c.mimeType === 'video/H264');
+        const rest = caps.codecs.filter(c => c.mimeType !== 'video/H264');
+        if (h264.length) txc.setCodecPreferences([...h264, ...rest]);
+      }
+    }
+
+    // High bitrate + prioritize sharpness over framerate
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      const params = sender.getParameters();
+      if (params.encodings && params.encodings[0]) {
+        params.encodings[0].maxBitrate = 8_000_000;
+        params.encodings[0].maxFramerate = 60;
+        params.degradationPreference = 'maintain-resolution';
+        await sender.setParameters(params);
+      }
+    }
+
+    pc.onconnectionstatechange = () => {
+      const s = pc.connectionState;
+      if (s === 'connected') status('Connected — streaming to tablet', 'ok');
+      if (s === 'disconnected' || s === 'failed') status('Connection lost. Stop and reshare.', 'err');
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc);
+
+    await fetch('/offer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(pc.localDescription)
+    });
+
+    status('Waiting for tablet to connect…', 'wait');
+
+    while (pc && !pc.remoteDescription) {
+      const res = await fetch('/answer');
+      if (res.ok && res.status === 200) {
+        await pc.setRemoteDescription(await res.json());
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch (err) {
+    if (err.name === 'NotAllowedError') status('Cancelled.', '');
+    else { status('Error: ' + err.message, 'err'); console.error(err); }
+  }
+}
+
+function stopCast() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (pc) { pc.close(); pc = null; }
+  stream = null;
+  const preview = document.getElementById('preview');
+  preview.srcObject = null;
+  preview.style.display = 'none';
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  status('Stopped.', '');
+  fetch('/reset', {method: 'POST'});
+}
+</script>
+</body>
+</html>
