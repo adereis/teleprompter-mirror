@@ -38,8 +38,7 @@ let t0 = performance.now();
 
 function renderClock() {
   const ms = performance.now() - t0;
-  const sec = (ms / 1000).toFixed(3);
-  clockEl.textContent = sec;
+  clockEl.textContent = (ms / 1000).toFixed(2);
 
   // Scrolling stripe — each column is one frame, shifts left over time
   const w = barCanvas.width, h = barCanvas.height;
