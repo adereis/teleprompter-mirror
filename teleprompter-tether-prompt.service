@@ -1,0 +1,8 @@
+[Unit]
+Description=Open tethering settings on tablet via ADB
+
+[Service]
+Type=oneshot
+User=__USER__
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/bin/adb shell am start -a android.settings.TETHER_SETTINGS

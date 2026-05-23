@@ -37,6 +37,19 @@ Use a **data-capable USB cable** — charge-only cables silently fail.
 and server startup. If the ADB USB function switch doesn't work (common on Samsung),
 the script opens the tethering settings on the tablet for manual toggle.
 
+### KVM switch recovery
+
+If the tablet is connected through a USB KVM switch, switching away and back resets
+the USB tethering. Install the system hooks to automate recovery:
+
+```bash
+sudo ./install-hooks.sh
+```
+
+After a KVM switch: accept the USB debugging prompt on the tablet → tethering settings
+open automatically → tap the USB tethering toggle → routing/firewall/ADB reverse are
+configured automatically. Or manually: `./start-mirror.sh reconnect`.
+
 <details>
 <summary>Manual USB tethering setup</summary>
 

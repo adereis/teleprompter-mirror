@@ -1,0 +1,27 @@
+#!/bin/bash
+# NetworkManager dispatcher script for Teleprompter Mirror.
+# Automatically configures USB tethering when the interface comes up.
+
+IFACE="$1"
+ACTION="$2"
+
+case "$IFACE" in usb*|enp*u*|enx*) ;; *) exit 0 ;; esac
+[ "$ACTION" = "up" ] || exit 0
+
+logger -t teleprompter "USB interface $IFACE came up — configuring"
+
+# Fix routing so USB tethering doesn't steal the default route
+CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
+if [ -n "$CONN" ]; then
+    nmcli connection modify "$CONN" ipv4.never-default yes ipv6.never-default yes 2>/dev/null
+    ip route del default dev "$IFACE" 2>/dev/null
+    logger -t teleprompter "Set never-default on '$CONN'"
+fi
+
+# Trust USB interface for WebRTC media (UDP)
+firewall-cmd --zone=trusted --change-interface="$IFACE" 2>/dev/null
+logger -t teleprompter "Firewall: $IFACE → trusted zone"
+
+# ADB reverse port forwarding (run as the user who owns the ADB server)
+runuser -u __USER__-- adb reverse tcp:8047 tcp:8047 2>/dev/null
+logger -t teleprompter "ADB reverse: tablet localhost:8047 → laptop"

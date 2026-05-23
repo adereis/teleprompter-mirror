@@ -35,7 +35,25 @@ Two approaches exist:
   that can be shared to the tablet; photograph both screens to measure delay.
 - `open-cast.sh` — Opens `/cast` in Chrome's `--app` mode (standalone window,
   separate taskbar entry, keeps Chrome Tab capture in getDisplayMedia).
-- `start-mirror.sh` — One-command USB tethering + server startup.
+- `start-mirror.sh` — One-command USB tethering + server startup. Supports
+  `usb` (full setup), `reconnect` (re-enable USB without restarting server),
+  and no-argument (server only) modes.
+
+### KVM switch automation
+
+When the tablet is on a USB KVM switch, disconnects/reconnects reset everything.
+Two system hooks automate recovery:
+
+- `99-teleprompter-tablet.rules` — udev rule. Detects Samsung tablet connecting
+  in MTP mode (`04e8:6860`) and triggers a systemd service that opens tethering
+  settings on the tablet via ADB. The user just taps the toggle.
+- `99-teleprompter` — NetworkManager dispatcher. Fires when `usb0` comes up
+  after tethering is enabled. Fixes routing (never-default), firewall (trusted
+  zone), and ADB reverse port forwarding. No user action needed.
+- `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
+  the udev rule. Runs `adb shell am start` as the user.
+- `install-hooks.sh` — Installs all three files to system directories (run
+  with sudo).
 
 ### RDP setup
 
