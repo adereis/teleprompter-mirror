@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Latency Test — Window Mirror</title>
+<style>
+  body { font-family: monospace; background: #000; color: #0f0; margin: 2em; }
+  #clock { font-size: 8em; font-weight: bold; }
+  #bar { width: 100%; height: 40px; margin-top: 1em; }
+  button { padding: 8px 16px; font-size: 14px; cursor: pointer;
+    background: #0f3460; color: #fff; border: none; border-radius: 6px; margin: 0.5em 0.5em 0.5em 0; }
+  button:hover { background: #1a4a8a; }
+  button:disabled { opacity: 0.4; }
+  #status { margin-top: 0.5em; font-size: 14px; }
+  .ok { color: #4ecca3; } .wait { color: #f0a500; }
+  p { color: #888; font-size: 13px; max-width: 600px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div id="clock">000.000</div>
+  <canvas id="bar" width="800" height="40"></canvas>
+  <div>
+    <button onclick="startTest()">Share This Window + Stream</button>
+    <button onclick="location.reload()">Stop</button>
+  </div>
+  <div id="status"></div>
+  <p>
+    How to measure: share this window via the button above, then open
+    /view on the tablet. Place the tablet next to this window and take a
+    photo of both screens — the difference in the displayed timestamps is
+    your end-to-end latency. The scrolling bar helps spot frame drops.
+  </p>
+<script>
+const clockEl = document.getElementById('clock');
+const barCanvas = document.getElementById('bar');
+const barCtx = barCanvas.getContext('2d');
+let t0 = performance.now();
+
+function renderClock() {
+  const ms = performance.now() - t0;
+  const sec = (ms / 1000).toFixed(3);
+  clockEl.textContent = sec;
+
+  // Scrolling stripe — each column is one frame, shifts left over time
+  const w = barCanvas.width, h = barCanvas.height;
+  const img = barCtx.getImageData(1, 0, w - 1, h);
+  barCtx.putImageData(img, 0, 0);
+  const hue = (ms * 0.3) % 360;
+  barCtx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+  barCtx.fillRect(w - 1, 0, 1, h);
+
+  requestAnimationFrame(renderClock);
+}
+renderClock();
+
+function statusMsg(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg; el.className = cls || '';
+}
+
+async function waitForIce(conn) {
+  if (conn.iceGatheringState === 'complete') return;
+  return new Promise(resolve => {
+    const t = setTimeout(resolve, 5000);
+    conn.onicegatheringstatechange = () => {
+      if (conn.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+    };
+  });
+}
+
+async function startTest() {
+  try {
+    await fetch('/reset', {method: 'POST'});
+    statusMsg('Select THIS window in the share dialog...', 'wait');
+
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {cursor: 'never', frameRate: {ideal: 60, max: 60}},
+      audio: false
+    });
+
+    const vtrack = stream.getVideoTracks()[0];
+    vtrack.contentHint = 'motion';
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+    });
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+    // Match cast.html settings: VP8, 8Mbps, scaleDown 2x
+    const txc = pc.getTransceivers()[0];
+    if (txc && txc.setCodecPreferences) {
+      const caps = RTCRtpSender.getCapabilities('video');
+      if (caps) {
+        const vp8 = caps.codecs.filter(c => c.mimeType === 'video/VP8');
+        const rest = caps.codecs.filter(c => c.mimeType !== 'video/VP8');
+        if (vp8.length) txc.setCodecPreferences([...vp8, ...rest]);
+      }
+    }
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      const params = sender.getParameters();
+      if (params.encodings?.[0]) {
+        params.encodings[0].maxBitrate = 8_000_000;
+        params.encodings[0].maxFramerate = 60;
+        params.encodings[0].scaleResolutionDownBy = 2.0;
+        params.degradationPreference = 'maintain-resolution';
+        await sender.setParameters(params);
+      }
+    }
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected')
+        statusMsg('Connected — compare timestamps on laptop vs tablet', 'ok');
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc);
+
+    await fetch('/offer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(pc.localDescription)
+    });
+    statusMsg('Waiting for tablet...', 'wait');
+
+    while (!pc.remoteDescription) {
+      const res = await fetch('/answer');
+      if (res.ok && res.status === 200) {
+        await pc.setRemoteDescription(await res.json());
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch (e) {
+    if (e.name !== 'NotAllowedError') statusMsg('Error: ' + e.message, '');
+  }
+}
+</script>
+</body>
+</html>

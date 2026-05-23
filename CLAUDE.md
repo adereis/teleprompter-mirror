@@ -64,6 +64,12 @@ Two approaches exist:
 - The tablet's Wi-Fi must be off when using USB tethering — otherwise WebRTC
   generates ICE candidates on the Wi-Fi interface, which hit the firewalled LAN
   interface instead of the trusted USB path.
+- GStreamer's `pipewiresrc` cannot consume GNOME Shell's screencast portal
+  streams on GNOME 49 / PipeWire 1.4.x. GNOME creates the screencast node
+  with `object.register=false`, making it invisible to pipewiresrc's
+  registry-based discovery. The `cast-region.py` prototype is blocked by
+  this. The workaround is `cast-crop.html`, which uses Chrome's
+  `getDisplayMedia()` + canvas crop instead.
 - The tablet is a Samsung Galaxy Tab A7 (SM-T500), Wi-Fi only, Android 12.
   USB tethering works despite being Wi-Fi only.
 
