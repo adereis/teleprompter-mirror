@@ -52,6 +52,18 @@ Two approaches exist:
 - USB tethering creates a wired connection that NetworkManager may set as the
   default route, breaking internet. Fix with `ipv4.never-default yes` on the USB
   connection profile — this persists across reconnects.
+- USB tethering interface naming varies by kernel/driver: `usb0` (legacy),
+  `enp*` (predictable naming), or `enx*` (MAC-based). Scripts must match all three.
+- `adb shell svc usb setFunctions rndis,adb` temporarily kills the ADB connection
+  because the USB stack resets. The command exits 137 (SIGKILL) — this is expected.
+  ADB reconnects within ~5 seconds.
+- Fedora's firewalld blocks WebRTC by default. The signaling server needs TCP open
+  (`firewall-cmd --add-port=8080/tcp`), and WebRTC media needs UDP on dynamic ports.
+  Simplest fix: move the USB interface to the `trusted` zone
+  (`firewall-cmd --zone=trusted --change-interface=usb0`). Both are runtime-only.
+- The tablet's Wi-Fi must be off when using USB tethering — otherwise WebRTC
+  generates ICE candidates on the Wi-Fi interface, which hit the firewalled LAN
+  interface instead of the trusted USB path.
 - The tablet is a Samsung Galaxy Tab A7 (SM-T500), Wi-Fi only, Android 12.
   USB tethering works despite being Wi-Fi only.
 

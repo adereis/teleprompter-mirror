@@ -26,18 +26,41 @@ Tap the tablet screen to toggle fullscreen.
 
 ### USB tethering (lower latency)
 
-For a direct wired link instead of Wi-Fi:
+For a direct wired link instead of Wi-Fi. Use a **data-capable USB cable** — charge-only
+cables silently fail (the tablet won't appear in `lsusb` or `adb devices`).
+
+The quickest path is `start-mirror.sh usb`, which handles tethering, routing, firewall,
+and server startup in one command:
+
+```bash
+./start-mirror.sh usb
+```
+
+Then open `http://localhost:8080/view` on the tablet (works via ADB reverse port
+forwarding that the script sets up).
+
+**Disable Wi-Fi on the tablet** before connecting — if Wi-Fi is active, WebRTC generates
+ICE candidates on the Wi-Fi interface, which may be blocked by the laptop's firewall.
+With Wi-Fi off, candidates use the USB tethering subnet where the firewall is open.
+
+<details>
+<summary>Manual USB tethering setup</summary>
 
 1. Connect the tablet via USB with ADB/debug enabled
-2. Enable **USB tethering** on the tablet (Settings → Connections → Tethering)
+2. Enable USB tethering: `adb shell svc usb setFunctions rndis,adb`
 3. Fix the default route so the laptop keeps its internet:
    ```bash
-   nmcli connection modify "Wired connection 1" ipv4.never-default yes ipv6.never-default yes
-   nmcli connection up "Wired connection 1"
+   nmcli connection modify "<usb-connection>" ipv4.never-default yes ipv6.never-default yes
    ```
-4. On the tablet, open `http://<usb-ip>:8080/view` (check `ip addr show enp*` for the IP)
+4. Open the firewall for signaling and media:
+   ```bash
+   sudo firewall-cmd --add-port=8080/tcp
+   sudo firewall-cmd --zone=trusted --change-interface=usb0
+   ```
+5. Set up ADB reverse: `adb reverse tcp:8080 tcp:8080`
+6. On the tablet, open `http://localhost:8080/view`
 
-Optionally disable Wi-Fi on the tablet to force all traffic over USB.
+</details>
 
 ### How it works
 
@@ -76,3 +99,4 @@ username/password: generated on first `./virtual-display.sh setup`.
 - `wl-mirror` (`dnf install wl-mirror`) — for local preview of virtual display
 - Python 3 (standard library only) — for the WebRTC mirror server
 - Chrome or Chromium on both laptop and tablet
+- `adb` (optional — for USB tethering setup via `start-mirror.sh`)

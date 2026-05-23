@@ -21,7 +21,7 @@ setup_usb() {
 
     echo "Waiting for USB network interface..."
     for i in $(seq 1 10); do
-        USB_IF=$(ip -o link show 2>/dev/null | grep -oP 'enp\S+(?=:)' | head -1)
+        USB_IF=$(ip -o link show 2>/dev/null | grep -oP '(usb\d+|enp\S+|enx\S+)(?=:)' | head -1)
         if [ -n "$USB_IF" ]; then
             break
         fi
@@ -50,6 +50,10 @@ setup_usb() {
         echo "Set never-default on '$conn'"
     fi
 
+    # Trust USB interface for WebRTC media (UDP)
+    sudo firewall-cmd --zone=trusted --change-interface="$USB_IF" 2>/dev/null \
+        && echo "Firewall: $USB_IF → trusted zone"
+
     # Wait for IP assignment
     for i in $(seq 1 5); do
         USB_IP=$(ip -4 addr show "$USB_IF" 2>/dev/null | grep -oP '(?<=inet )\S+(?=/)') || true
@@ -66,6 +70,10 @@ if [ "${1:-}" = "usb" ]; then
     setup_usb
     echo ""
 fi
+
+# Open signaling port on the firewall (runtime only, reverts on reboot)
+sudo firewall-cmd --add-port="$PORT/tcp" 2>/dev/null \
+    && echo "Firewall: opened TCP $PORT"
 
 echo "Starting mirror server on port $PORT..."
 exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
