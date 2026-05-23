@@ -11,15 +11,21 @@
   #overlay {
     position: fixed; inset: 0;
     display: flex; align-items: center; justify-content: center;
-    color: #666; font-family: system-ui, sans-serif; font-size: 1.4em;
+    color: #444; font-family: system-ui, sans-serif; font-size: 1.4em;
     text-align: center; padding: 2em;
   }
   #overlay.hidden { display: none; }
+  #overlay span {
+    animation: drift-x 23s ease-in-out infinite alternate,
+               drift-y 17s ease-in-out infinite alternate;
+  }
+  @keyframes drift-x { from { transform: translateX(-20vw); } to { transform: translateX(20vw); } }
+  @keyframes drift-y { from { transform: translateY(-15vh); } to { transform: translateY(15vh); } }
 </style>
 </head>
 <body>
   <video id="video" autoplay playsinline muted></video>
-  <div id="overlay">Waiting for cast…</div>
+  <div id="overlay"><span>Waiting for cast…</span></div>
 <script>
 const overlay = document.getElementById('overlay');
 const video = document.getElementById('video');
@@ -45,7 +51,7 @@ async function connect() {
     if (!offer) await new Promise(r => setTimeout(r, 500));
   }
 
-  overlay.textContent = 'Connecting…';
+  overlay.querySelector('span').textContent = 'Connecting…';
 
   pc = new RTCPeerConnection({
     iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
@@ -64,7 +70,7 @@ async function connect() {
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     if (s === 'disconnected' || s === 'failed') {
-      overlay.textContent = 'Reconnecting…';
+      overlay.querySelector('span').textContent = 'Waiting for cast…';
       overlay.classList.remove('hidden');
       video.style.display = 'none';
       if (pc) pc.close();
