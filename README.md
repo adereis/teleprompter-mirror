@@ -1,81 +1,78 @@
-# Conference Setup
+# Teleprompter Mirror
 
-Tools for mirroring a laptop window to a tablet, designed for a teleprompter-style
-video calling setup (eye contact with the camera by placing the tablet nearby).
+Mirror a laptop window to a tablet placed near the camera, designed for
+eye contact during video calls.
 
-## WebRTC Window Mirror
+## Quick start
 
-Captures a specific window on the laptop and streams it to a tablet browser via
-WebRTC. Ideal for video calls on a large/5K monitor where full-screen RDP mirroring
-would be impractical.
+1. Connect the tablet via USB (data cable, not charge-only) with ADB debugging enabled
+2. Start the server with USB tethering:
+   ```bash
+   ./start-mirror.sh usb
+   ```
+3. Open the cast page — either from GNOME's app launcher ("Teleprompter Mirror") or:
+   ```bash
+   ./open-cast.sh
+   ```
+4. On the tablet, open `http://localhost:8047/view` in Chrome
 
-### Usage
+The server binds to `localhost:8047` — the tablet reaches it via ADB reverse port
+forwarding (set up automatically by `start-mirror.sh`).
 
-Start the server:
+## Pages
 
-```bash
-./mirror-server.py               # auto-detects all local IPs
-./mirror-server.py --ip 10.0.0.5 # use a specific IP for mDNS rewrite
-```
+| Path | Purpose |
+|------|---------|
+| `/cast` | Share a window and stream it to the tablet |
+| `/cast-crop` | Share a screen region (draw a crop rectangle) |
+| `/view` | Tablet viewer (mirrored, fullscreen, auto-reconnect) |
+| `/latency` | Visual latency measurement tool |
 
-Then open:
-- **Laptop**: http://localhost:8080/cast — click "Share Window" and pick a window
-- **Tablet**: http://\<laptop-ip\>:8080/view — auto-connects and displays the stream
+## USB tethering (recommended)
 
-Tap the tablet screen to toggle fullscreen.
+USB tethering provides lower latency (~90ms) and a secure direct link.
+Use a **data-capable USB cable** — charge-only cables silently fail.
 
-### USB tethering (lower latency)
-
-For a direct wired link instead of Wi-Fi. Use a **data-capable USB cable** — charge-only
-cables silently fail (the tablet won't appear in `lsusb` or `adb devices`).
-
-The quickest path is `start-mirror.sh usb`, which handles tethering, routing, firewall,
-and server startup in one command:
-
-```bash
-./start-mirror.sh usb
-```
-
-Then open `http://localhost:8080/view` on the tablet (works via ADB reverse port
-forwarding that the script sets up).
-
-**Disable Wi-Fi on the tablet** before connecting — if Wi-Fi is active, WebRTC generates
-ICE candidates on the Wi-Fi interface, which may be blocked by the laptop's firewall.
-With Wi-Fi off, candidates use the USB tethering subnet where the firewall is open.
+`start-mirror.sh usb` handles everything: tethering, routing, firewall, ADB reverse,
+and server startup. If the ADB USB function switch doesn't work (common on Samsung),
+the script opens the tethering settings on the tablet for manual toggle.
 
 <details>
 <summary>Manual USB tethering setup</summary>
 
 1. Connect the tablet via USB with ADB/debug enabled
-2. Enable USB tethering: `adb shell svc usb setFunctions rndis,adb`
+2. Enable USB tethering on the tablet (Settings → Connections → Tethering), or:
+   `adb shell svc usb setFunctions rndis,adb`
 3. Fix the default route so the laptop keeps its internet:
    ```bash
-   nmcli connection modify "<usb-connection>" ipv4.never-default yes ipv6.never-default yes
+   nmcli connection modify "<usb-connection>" ipv4.never-default yes
    ```
-4. Open the firewall for signaling and media:
+4. Trust the USB interface for WebRTC media:
    ```bash
-   sudo firewall-cmd --add-port=8080/tcp
    sudo firewall-cmd --zone=trusted --change-interface=usb0
    ```
-5. Set up ADB reverse: `adb reverse tcp:8080 tcp:8080`
-6. On the tablet, open `http://localhost:8080/view`
+5. Set up ADB reverse: `adb reverse tcp:8047 tcp:8047`
+6. Start the server: `./mirror-server.py`
+7. On the tablet, open `http://localhost:8047/view`
 
 </details>
 
-### How it works
+## How it works
 
 - `cast.html` uses `getDisplayMedia()` to capture a window, then sends it via WebRTC
-- `view.html` receives the WebRTC stream and displays it fullscreen
+- `view.html` receives the stream and displays it fullscreen with horizontal mirror
+  (teleprompter effect) and screen wake lock
 - `mirror-server.py` handles signaling (SDP offer/answer exchange) and rewrites
-  Chrome's mDNS ICE candidates to real LAN IPs so the tablet can connect
+  Chrome's mDNS ICE candidates to real LAN IPs so ICE can connect
 
-### Tuning
+## Tuning
 
 The cast page is configured for video call mirroring:
 - VP8 preferred (Chrome's libvpx encoder is optimized for real-time WebRTC)
-- 8 Mbps max bitrate (high quality on LAN)
+- 8 Mbps max bitrate, 2x resolution downscale (4K source → 2K encode)
 - 60 fps capture, `contentHint = 'motion'` (smooth faces over sharp text)
-- `degradationPreference = 'maintain-resolution'`
+- `jitterBufferTarget = 0` on viewer (minimizes receive-side delay on USB)
+- Live encoder stats shown on the cast page after connection
 
 ## RDP Virtual Display (alternative)
 

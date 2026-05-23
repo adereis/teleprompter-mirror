@@ -2,8 +2,8 @@
 
 ## Project overview
 
-Teleprompter-style conference setup: mirror a video call window from a laptop/desktop
-to a tablet placed near the camera for eye contact during meetings.
+Teleprompter Mirror: mirror a video call window from a laptop/desktop to a tablet
+placed near the camera for eye contact during meetings.
 
 Two approaches exist:
 1. **WebRTC window mirror** (`mirror-server.py`, `cast.html`, `view.html`) —
@@ -15,18 +15,27 @@ Two approaches exist:
 
 ### WebRTC mirror
 
-- `mirror-server.py` — Python HTTP server (stdlib only, no deps). Serves the HTML
-  pages and acts as the WebRTC signaling relay (SDP offer/answer exchange via
-  POST/GET). Rewrites Chrome mDNS ICE candidates to real LAN IPs in `_fix_mdns()`.
-  Supports `--ip` to force a specific IP, otherwise auto-detects all local IPv4
-  addresses and duplicates mDNS candidates for each (so ICE works on both Wi-Fi
-  and USB networks simultaneously).
+- `mirror-server.py` — Python HTTP server (stdlib only, no deps). Binds to
+  `127.0.0.1:8047` by default (localhost only — tablet connects via ADB reverse).
+  Serves the HTML pages and acts as the WebRTC signaling relay (SDP offer/answer
+  exchange via POST/GET). Rewrites Chrome mDNS ICE candidates to real LAN IPs
+  in `_fix_mdns()`. Supports `--bind` to override the bind address and `--ip`
+  to force a specific IP for mDNS rewrite.
 - `cast.html` — Laptop-side. Uses `getDisplayMedia()` + `RTCPeerConnection` to
-  capture and send a window. Runs on `localhost` (secure context required for
-  getDisplayMedia).
-- `view.html` — Tablet-side. Receives WebRTC stream. Must have `muted` attribute
-  on `<video>` to satisfy Android Chrome autoplay policy. Auto-reconnects on
-  disconnect.
+  capture and send a window. Shows WebRTC stats (encode time, FPS, bitrate, RTT,
+  jitter) after connection. Downscales 2x before encoding to reduce VP8 CPU load.
+- `cast-crop.html` — Experimental. Like `cast.html` but adds a canvas-based crop
+  step: capture full screen, draw a rectangle to select a region, stream only that
+  region. Uses `requestVideoFrameCallback` for frame-synced rendering.
+- `view.html` — Tablet-side. Receives WebRTC stream and displays it fullscreen with
+  horizontal flip (`scaleX(-1)` for teleprompter mirror effect). Sets
+  `jitterBufferTarget=0` to minimize receive-side buffering on USB. Requests
+  Screen Wake Lock to keep the tablet on. Auto-reconnects on disconnect.
+- `latency-test.html` — Visual latency measurement. Displays a millisecond clock
+  that can be shared to the tablet; photograph both screens to measure delay.
+- `open-cast.sh` — Opens `/cast` in Chrome's `--app` mode (standalone window,
+  separate taskbar entry, keeps Chrome Tab capture in getDisplayMedia).
+- `start-mirror.sh` — One-command USB tethering + server startup.
 
 ### RDP setup
 
@@ -36,6 +45,12 @@ Two approaches exist:
   `virtual-display.sh setup` if missing.
 - The headless service is `gnome-remote-desktop-headless.service` (not
   `gnome-remote-desktop.service` — that's screen sharing, different unit).
+
+### Non-functional prototypes
+
+- `cast-region.py` — Native GStreamer/PipeWire screen capture prototype. Blocked
+  by GNOME 49's `object.register=false` on screencast PipeWire nodes. Kept for
+  reference; see docstring for details.
 
 ## Key gotchas
 
@@ -57,13 +72,16 @@ Two approaches exist:
 - `adb shell svc usb setFunctions rndis,adb` temporarily kills the ADB connection
   because the USB stack resets. The command exits 137 (SIGKILL) — this is expected.
   ADB reconnects within ~5 seconds.
-- Fedora's firewalld blocks WebRTC by default. The signaling server needs TCP open
-  (`firewall-cmd --add-port=8080/tcp`), and WebRTC media needs UDP on dynamic ports.
-  Simplest fix: move the USB interface to the `trusted` zone
-  (`firewall-cmd --zone=trusted --change-interface=usb0`). Both are runtime-only.
-- The tablet's Wi-Fi must be off when using USB tethering — otherwise WebRTC
-  generates ICE candidates on the Wi-Fi interface, which hit the firewalled LAN
-  interface instead of the trusted USB path.
+- Samsung tablets may silently revert the USB function back to MTP. The
+  `start-mirror.sh` script falls back to opening the tethering Settings UI via
+  `adb shell am start -a android.settings.TETHER_SETTINGS` when this happens.
+- Fedora's firewalld blocks WebRTC media (UDP) by default. Move the USB interface
+  to the `trusted` zone (`firewall-cmd --zone=trusted --change-interface=usb0`).
+  This is runtime-only. The signaling server no longer needs a TCP firewall rule
+  since it binds to localhost (tablet reaches it via ADB reverse).
+- The tablet's Wi-Fi can stay on when using USB tethering — the firewall naturally
+  forces WebRTC media over USB. Wi-Fi UDP is blocked by the default zone, while
+  USB is in the trusted zone. ICE tries both paths and selects USB.
 - GStreamer's `pipewiresrc` cannot consume GNOME Shell's screencast portal
   streams on GNOME 49 / PipeWire 1.4.x. GNOME creates the screencast node
   with `object.register=false`, making it invisible to pipewiresrc's
