@@ -60,6 +60,7 @@ async function connect() {
     if (recv && recv.jitterBufferTarget !== undefined) recv.jitterBufferTarget = 0;
   };
 
+
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     if (s === 'disconnected' || s === 'failed') {
@@ -85,6 +86,19 @@ async function connect() {
 }
 
 connect();
+
+// Keep tablet screen on while viewing
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator) {
+      let lock = await navigator.wakeLock.request('screen');
+      document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState === 'visible') lock = await navigator.wakeLock.request('screen');
+      });
+    }
+  } catch (_) {}
+}
+keepAwake();
 
 document.body.addEventListener('click', () => {
   if (!document.fullscreenElement)
