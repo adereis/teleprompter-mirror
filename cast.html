@@ -22,6 +22,11 @@
   .ok { color: #4ecca3; }
   .wait { color: #f0a500; }
   .err { color: #e74c3c; }
+  #stats {
+    margin-top: 1em; font-family: monospace; font-size: 13px;
+    color: #888; line-height: 1.6; display: none;
+  }
+  #stats span { color: #4ecca3; }
 </style>
 </head>
 <body>
@@ -31,8 +36,9 @@
   <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
   <video id="preview" autoplay muted playsinline></video>
   <div id="status"></div>
+  <div id="stats"></div>
 <script>
-let pc = null, stream = null;
+let pc = null, stream = null, statsInterval = null;
 
 function status(msg, cls) {
   const el = document.getElementById('status');
@@ -102,7 +108,11 @@ async function startCast() {
 
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
-      if (s === 'connected') status('Connected — streaming to tablet', 'ok');
+      if (s === 'connected') {
+        status('Connected — streaming to tablet', 'ok');
+        document.getElementById('stats').style.display = 'block';
+        startStats();
+      }
       if (s === 'disconnected' || s === 'failed') status('Connection lost. Stop and reshare.', 'err');
     };
 
@@ -133,6 +143,7 @@ async function startCast() {
 }
 
 function stopCast() {
+  if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
   if (pc) { pc.close(); pc = null; }
   stream = null;
@@ -141,8 +152,41 @@ function stopCast() {
   preview.style.display = 'none';
   document.getElementById('startBtn').disabled = false;
   document.getElementById('stopBtn').disabled = true;
+  document.getElementById('stats').style.display = 'none';
   status('Stopped.', '');
   fetch('/reset', {method: 'POST'});
+}
+
+let prevStats = {};
+function startStats() {
+  const el = document.getElementById('stats');
+  statsInterval = setInterval(async () => {
+    if (!pc) return;
+    const report = await pc.getStats();
+    let out = {};
+    report.forEach(s => {
+      if (s.type === 'outbound-rtp' && s.kind === 'video') {
+        const encMs = s.totalEncodeTime && s.framesEncoded
+          ? ((s.totalEncodeTime / s.framesEncoded) * 1000).toFixed(1) : '?';
+        const fps = s.framesPerSecond || '?';
+        const w = s.frameWidth || '?', h = s.frameHeight || '?';
+        const prevBytes = prevStats.bytesSent || 0;
+        const prevTs = prevStats.timestamp || s.timestamp;
+        const dt = (s.timestamp - prevTs) / 1000;
+        const kbps = dt > 0 ? Math.round(((s.bytesSent - prevBytes) * 8 / 1000) / dt) : 0;
+        const ql = s.qualityLimitationReason || 'none';
+        out.encode = `Encode: <span>${encMs}ms/frame</span>  ${w}x${h} @ <span>${fps}fps</span>`;
+        out.bitrate = `Bitrate: <span>${kbps} kbps</span>  Quality limit: <span>${ql}</span>`;
+        prevStats = {bytesSent: s.bytesSent, timestamp: s.timestamp};
+      }
+      if (s.type === 'remote-inbound-rtp' && s.kind === 'video') {
+        const rtt = s.roundTripTime != null ? (s.roundTripTime * 1000).toFixed(0) : '?';
+        const jitter = s.jitter != null ? (s.jitter * 1000).toFixed(1) : '?';
+        out.net = `RTT: <span>${rtt}ms</span>  Jitter: <span>${jitter}ms</span>`;
+      }
+    });
+    el.innerHTML = [out.encode, out.bitrate, out.net].filter(Boolean).join('<br>');
+  }, 1000);
 }
 </script>
 </body>
