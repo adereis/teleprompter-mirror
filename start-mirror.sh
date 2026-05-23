@@ -2,8 +2,9 @@
 # Start the WebRTC window mirror with optional USB tethering setup.
 #
 # Usage:
-#   ./start-mirror.sh          # Wi-Fi only
-#   ./start-mirror.sh usb      # enable USB tethering first
+#   ./start-mirror.sh              # start server only
+#   ./start-mirror.sh usb          # enable USB tethering + start server
+#   ./start-mirror.sh reconnect    # re-enable USB after KVM switch (no server restart)
 
 set -euo pipefail
 
@@ -76,10 +77,20 @@ setup_usb() {
     adb reverse tcp:$PORT tcp:$PORT 2>/dev/null && echo "ADB reverse: localhost:$PORT → laptop"
 }
 
-if [ "${1:-}" = "usb" ]; then
-    setup_usb
-    echo ""
-fi
-
-echo "Starting mirror server on port $PORT..."
-exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
+case "${1:-}" in
+    usb)
+        setup_usb
+        echo ""
+        echo "Starting mirror server on port $PORT..."
+        exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
+        ;;
+    reconnect)
+        setup_usb
+        echo ""
+        echo "USB reconnected. Reload http://localhost:$PORT/view on the tablet."
+        ;;
+    *)
+        echo "Starting mirror server on port $PORT..."
+        exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
+        ;;
+esac
