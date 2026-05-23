@@ -17,10 +17,20 @@ setup_usb() {
     fi
 
     echo "Enabling USB tethering via ADB..."
-    adb shell svc usb setFunctions rndis
+    adb shell svc usb setFunctions rndis,adb 2>/dev/null || true
+    sleep 5
+
+    USB_IF=$(ip -o link show 2>/dev/null | grep -oP '(usb\d+|enp\S+|enx\S+)(?=:)' | head -1)
+
+    if [ -z "$USB_IF" ]; then
+        echo "ADB USB function switch didn't work — opening tethering settings on tablet..."
+        adb shell am start -a android.settings.TETHER_SETTINGS 2>/dev/null
+        echo "Enable USB tethering on the tablet, then press Enter."
+        read -r
+    fi
 
     echo "Waiting for USB network interface..."
-    for i in $(seq 1 10); do
+    for i in $(seq 1 15); do
         USB_IF=$(ip -o link show 2>/dev/null | grep -oP '(usb\d+|enp\S+|enx\S+)(?=:)' | head -1)
         if [ -n "$USB_IF" ]; then
             break
