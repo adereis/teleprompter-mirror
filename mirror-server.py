@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WebRTC signaling server for window mirroring to a tablet."""
+"""WebRTC signaling server for teleprompter mirroring to a tablet."""
 
 import argparse
 import json
@@ -120,19 +120,20 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WebRTC window mirror signaling server")
-    parser.add_argument("-p", "--port", type=int, default=8080)
+    parser = argparse.ArgumentParser(description="Teleprompter mirror signaling server")
+    parser.add_argument("-p", "--port", type=int, default=8047)
+    parser.add_argument("--bind", default="127.0.0.1",
+                        help="Bind address (default: 127.0.0.1 — localhost only)")
     parser.add_argument("--ip", help="Override LAN IP (default: auto-detect all)")
     args = parser.parse_args()
 
     all_ips = subprocess.check_output(["hostname", "-I"]).decode().split()
     LAN_IPS = [args.ip] if args.ip else [ip for ip in all_ips if ":" not in ip]
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
-    print(f"Window mirror server running on port {args.port}")
-    print(f"  Laptop:  http://localhost:{args.port}/cast")
-    for ip in LAN_IPS:
-        print(f"  Tablet:  http://{ip}:{args.port}/view")
+    server = ThreadingHTTPServer((args.bind, args.port), Handler)
+    print(f"Teleprompter mirror on {args.bind}:{args.port}")
+    print(f"  Cast:  http://localhost:{args.port}/cast")
+    print(f"  View:  http://localhost:{args.port}/view  (tablet via ADB reverse)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

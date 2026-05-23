@@ -8,7 +8,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PORT=8080
+PORT=8047
 
 setup_usb() {
     if ! adb devices 2>/dev/null | grep -q "device$"; then
@@ -80,10 +80,6 @@ if [ "${1:-}" = "usb" ]; then
     setup_usb
     echo ""
 fi
-
-# Open signaling port on the firewall (runtime only, reverts on reboot)
-sudo firewall-cmd --add-port="$PORT/tcp" 2>/dev/null \
-    && echo "Firewall: opened TCP $PORT"
 
 echo "Starting mirror server on port $PORT..."
 exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
