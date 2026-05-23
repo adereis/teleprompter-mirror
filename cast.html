@@ -87,13 +87,14 @@ async function startCast() {
       }
     }
 
-    // High bitrate + prioritize sharpness over framerate
+    // Downscale 2x before encoding — 4K source is overkill for the tablet
     const sender = pc.getSenders().find(s => s.track?.kind === 'video');
     if (sender) {
       const params = sender.getParameters();
       if (params.encodings && params.encodings[0]) {
         params.encodings[0].maxBitrate = 8_000_000;
         params.encodings[0].maxFramerate = 60;
+        params.encodings[0].scaleResolutionDownBy = 2.0;
         params.degradationPreference = 'maintain-resolution';
         await sender.setParameters(params);
       }

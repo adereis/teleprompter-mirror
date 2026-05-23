@@ -55,6 +55,9 @@ async function connect() {
     video.srcObject = e.streams[0];
     video.style.display = 'block';
     overlay.classList.add('hidden');
+    // Minimize jitter buffer — USB tethering has near-zero jitter
+    const recv = pc.getReceivers().find(r => r.track?.kind === 'video');
+    if (recv && recv.jitterBufferTarget !== undefined) recv.jitterBufferTarget = 0;
   };
 
   pc.onconnectionstatechange = () => {
