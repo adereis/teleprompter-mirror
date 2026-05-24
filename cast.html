@@ -143,18 +143,17 @@ async function startCast() {
       }
     }
 
-    // Downscale to viewer resolution — updated dynamically when viewport is received
+    // Downscale to viewer resolution, or 1920px max as a safe default
     const sender = pc.getSenders().find(s => s.track?.kind === 'video');
     if (sender) {
+      const settings = vtrack.getSettings();
+      const maxW = viewerW || 1920, maxH = viewerH || 1080;
+      const factor = Math.max(settings.width / maxW, settings.height / maxH, 1.0);
       const params = sender.getParameters();
       if (params.encodings && params.encodings[0]) {
         params.encodings[0].maxBitrate = 8_000_000;
         params.encodings[0].maxFramerate = 60;
-        if (viewerW && viewerH) {
-          const settings = vtrack.getSettings();
-          const factor = Math.max(settings.width / viewerW, settings.height / viewerH, 1.0);
-          if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
-        }
+        if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
         params.degradationPreference = 'maintain-resolution';
         await sender.setParameters(params);
       }
