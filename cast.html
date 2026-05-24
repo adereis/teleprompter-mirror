@@ -14,10 +14,16 @@
   }
   button:hover { background: #1a4a8a; }
   button:disabled { opacity: 0.4; cursor: default; }
-  #preview {
-    margin-top: 1em; max-width: 640px; width: 100%;
-    background: #000; border-radius: 4px; display: none;
+  #previewWrap {
+    position: relative; margin-top: 1em; max-width: 640px; width: 100%;
+    aspect-ratio: 16/9; background: #000; border: 2px dashed #4ecca3;
+    border-radius: 4px; display: none; box-sizing: border-box;
   }
+  #previewWrap::after {
+    content: attr(data-label); position: absolute; top: 4px; left: 8px;
+    color: #4ecca3; font-size: 11px; font-family: system-ui; opacity: 0.7;
+  }
+  #preview { width: 100%; height: 100%; object-fit: contain; }
   #status { margin-top: 1em; font-size: 14px; }
   .ok { color: #4ecca3; }
   .wait { color: #f0a500; }
@@ -34,11 +40,48 @@
   <p class="sub">Select a window to share — the tablet viewer will mirror it.</p>
   <button id="startBtn" onclick="startCast()">Share Window</button>
   <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
-  <video id="preview" autoplay muted playsinline></video>
+  <div id="previewWrap">
+    <video id="preview" autoplay muted playsinline></video>
+  </div>
   <div id="status"></div>
   <div id="stats"></div>
 <script>
-let pc = null, stream = null, statsInterval = null;
+let pc = null, dc = null, stream = null, statsInterval = null;
+let viewerW = 0, viewerH = 0;
+
+function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+function ratioStr(w, h) { const g = gcd(w, h); return `${w/g}:${h/g}`; }
+
+function onViewport(w, h) {
+  viewerW = w; viewerH = h;
+  const ratio = w / h;
+  const wrap = document.getElementById('previewWrap');
+  wrap.style.aspectRatio = `${w}/${h}`;
+  wrap.dataset.label = `viewer ${w}×${h} (${ratioStr(w, h)})`;
+
+  const sub = document.querySelector('.sub');
+  const r = ratioStr(w, h);
+  const ex1 = `${Math.round(600 * ratio)}×600`;
+  const ex2 = `${Math.round(900 * ratio)}×900`;
+  sub.innerHTML = `Select a window to share — the tablet viewer will mirror it.<br>` +
+    `Optimal window ratio for the viewer: <strong>${r}</strong> (e.g. ${ex1}, ${ex2})`;
+
+  // Update scaling if already streaming
+  if (pc && stream) {
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      const vtrack = stream.getVideoTracks()[0];
+      const settings = vtrack.getSettings();
+      const factor = Math.max(settings.width / w, settings.height / h, 1.0);
+      const params = sender.getParameters();
+      if (params.encodings?.[0]) {
+        if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
+        else delete params.encodings[0].scaleResolutionDownBy;
+        sender.setParameters(params);
+      }
+    }
+  }
+}
 
 function status(msg, cls) {
   const el = document.getElementById('status');
@@ -68,7 +111,7 @@ async function startCast() {
 
     const preview = document.getElementById('preview');
     preview.srcObject = stream;
-    preview.style.display = 'block';
+    document.getElementById('previewWrap').style.display = 'block';
     document.getElementById('startBtn').disabled = true;
     document.getElementById('stopBtn').disabled = false;
 
@@ -79,6 +122,13 @@ async function startCast() {
     pc = new RTCPeerConnection({
       iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
     });
+    dc = pc.createDataChannel('control');
+    dc.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
+      } catch (_) {}
+    };
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
 
     // Prefer VP8 — Chrome's libvpx is optimized for real-time WebRTC
@@ -93,14 +143,18 @@ async function startCast() {
       }
     }
 
-    // Downscale 2x before encoding — 4K source is overkill for the tablet
+    // Downscale to viewer resolution — updated dynamically when viewport is received
     const sender = pc.getSenders().find(s => s.track?.kind === 'video');
     if (sender) {
       const params = sender.getParameters();
       if (params.encodings && params.encodings[0]) {
         params.encodings[0].maxBitrate = 8_000_000;
         params.encodings[0].maxFramerate = 60;
-        params.encodings[0].scaleResolutionDownBy = 2.0;
+        if (viewerW && viewerH) {
+          const settings = vtrack.getSettings();
+          const factor = Math.max(settings.width / viewerW, settings.height / viewerH, 1.0);
+          if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
+        }
         params.degradationPreference = 'maintain-resolution';
         await sender.setParameters(params);
       }
@@ -146,10 +200,10 @@ function stopCast() {
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
   if (pc) { pc.close(); pc = null; }
-  stream = null;
+  stream = null; dc = null;
   const preview = document.getElementById('preview');
   preview.srcObject = null;
-  preview.style.display = 'none';
+  document.getElementById('previewWrap').style.display = 'none';
   document.getElementById('startBtn').disabled = false;
   document.getElementById('stopBtn').disabled = true;
   document.getElementById('stats').style.display = 'none';

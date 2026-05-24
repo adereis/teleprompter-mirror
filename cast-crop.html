@@ -32,6 +32,9 @@
     <button id="streamBtn" onclick="startStream()" disabled>Stream to Tablet</button>
     <button id="stopBtn" onclick="stopAll()" disabled>Stop</button>
     <button id="resetCropBtn" onclick="resetCrop()" style="display:none">Reset Crop</button>
+    <label id="lockLabel" style="display:none; font-size:13px; cursor:pointer">
+      <input type="checkbox" id="lockRatio" checked onchange="ratioLock=this.checked"> <span>Lock 5:3 (viewer)</span>
+    </label>
     <span id="info"></span>
   </div>
   <div id="status"></div>
@@ -45,10 +48,21 @@ const source  = document.getElementById('source');
 const pctx = preview.getContext('2d');
 const octx = output.getContext('2d');
 
-let rawStream = null, pc = null, animId = null;
+let rawStream = null, pc = null, dc = null, animId = null;
 let crop = null;   // {x,y,w,h} in video-pixel coords
 let scale = 1;     // preview pixels per video pixel
 let dragging = false, dragStart = null;
+let ratioLock = true;
+let VIEWER_RATIO = 5 / 3;
+
+function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+
+function onViewport(w, h) {
+  VIEWER_RATIO = w / h;
+  const g = gcd(w, h);
+  const label = document.getElementById('lockLabel');
+  label.querySelector('span').textContent = `Lock ${w/g}:${h/g} (viewer)`;
+}
 
 function status(msg, cls) {
   const el = document.getElementById('status');
@@ -93,6 +107,7 @@ async function startCapture() {
     document.getElementById('captureBtn').disabled = true;
     document.getElementById('streamBtn').disabled = false;
     document.getElementById('resetCropBtn').style.display = '';
+    document.getElementById('lockLabel').style.display = '';
 
     status('Draw a rectangle to crop, or click Stream to send the full capture.', '');
     info(`Source: ${vw}x${vh}`);
@@ -126,9 +141,31 @@ function renderPreview() {
   pctx.setLineDash([]);
 
   // Crop label
+  const cr = crop.w && crop.h ? (crop.w / crop.h).toFixed(2) : '?';
+  const match = Math.abs(crop.w / crop.h - VIEWER_RATIO) < 0.05 ? ' ✓' : ` (tablet: ${VIEWER_RATIO.toFixed(2)})`;
   pctx.fillStyle = '#4ecca3';
   pctx.font = '12px system-ui';
-  pctx.fillText(`${crop.w}x${crop.h} @ (${crop.x},${crop.y})`, cx + 4, cy - 5);
+  pctx.fillText(`${crop.w}×${crop.h}  ratio ${cr}${match}`, cx + 4, cy - 5);
+
+  // Show tablet viewport guide when no crop is drawn (full frame)
+  const fullFrame = crop.x === 0 && crop.y === 0 && crop.w === source.videoWidth && crop.h === source.videoHeight;
+  if (fullFrame) {
+    const sr = crop.w / crop.h;
+    let gw, gh;
+    if (sr > VIEWER_RATIO) { gh = preview.height; gw = Math.round(gh * VIEWER_RATIO); }
+    else { gw = preview.width; gh = Math.round(gw / VIEWER_RATIO); }
+    const gx = Math.round((preview.width - gw) / 2), gy = Math.round((preview.height - gh) / 2);
+    pctx.strokeStyle = 'rgba(78,204,163,0.6)';
+    pctx.lineWidth = 2;
+    pctx.setLineDash([6, 3]);
+    pctx.strokeRect(gx, gy, gw, gh);
+    pctx.setLineDash([]);
+    const pct = Math.round((1 - Math.min(sr, VIEWER_RATIO) / Math.max(sr, VIEWER_RATIO)) * 100);
+    if (pct >= 3) {
+      pctx.fillStyle = 'rgba(78,204,163,0.6)';
+      pctx.fillText(`viewer — ${pct}% unused`, gx, Math.max(12, gy - 5));
+    }
+  }
 
   animId = requestAnimationFrame(renderPreview);
 }
@@ -150,9 +187,16 @@ preview.addEventListener('mousedown', e => {
 preview.addEventListener('mousemove', e => {
   if (!dragging) return;
   const p = canvasToVideo(e);
+  let w = Math.abs(p.x - dragStart.x);
+  let h = Math.abs(p.y - dragStart.y);
+  if (ratioLock && w > 16 && h > 16) {
+    h = Math.round(w / VIEWER_RATIO);
+  }
+  const x = Math.min(dragStart.x, p.x);
+  const y = p.y < dragStart.y ? dragStart.y - h : dragStart.y;
   crop = {
-    x: Math.min(dragStart.x, p.x), y: Math.min(dragStart.y, p.y),
-    w: Math.abs(p.x - dragStart.x), h: Math.abs(p.y - dragStart.y)
+    x: Math.max(0, x), y: Math.max(0, y),
+    w: Math.min(w, source.videoWidth - x), h: Math.min(h, source.videoHeight - y)
   };
 });
 preview.addEventListener('mouseup', () => {
@@ -190,6 +234,13 @@ async function startStream() {
     pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
+    dc = pc.createDataChannel('control');
+    dc.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
+      } catch (_) {}
+    };
     croppedStream.getTracks().forEach(t => pc.addTrack(t, croppedStream));
 
     // Prefer VP8
@@ -269,6 +320,7 @@ function stopAll() {
   document.getElementById('streamBtn').disabled = true;
   document.getElementById('stopBtn').disabled = true;
   document.getElementById('resetCropBtn').style.display = 'none';
+  document.getElementById('lockLabel').style.display = 'none';
   info('');
   status('Stopped.', '');
   fetch('/reset', { method: 'POST' });

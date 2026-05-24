@@ -67,6 +67,12 @@ async function connect() {
   };
 
 
+  pc.ondatachannel = (e) => {
+    e.channel.onopen = () => {
+      e.channel.send(JSON.stringify({viewport: {w: screen.width, h: screen.height}}));
+    };
+  };
+
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     if (s === 'disconnected' || s === 'failed') {
