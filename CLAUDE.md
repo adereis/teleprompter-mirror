@@ -64,6 +64,17 @@ Two system hooks automate recovery:
 - The headless service is `gnome-remote-desktop-headless.service` (not
   `gnome-remote-desktop.service` — that's screen sharing, different unit).
 
+### Camera control
+
+- `camera-control.py` — Controls the Sony A6300 camera via Sony's Camera Remote
+  API (JSON-RPC over WiFi). Requires the camera to be in Movie mode with Smart
+  Remote Embedded running. The laptop connects to the camera's WiFi AP
+  (`DIRECT-xxxx:ILCE-6300`) while HDMI capture continues working simultaneously.
+  Supports zoom in/out (power zoom lens only), refocus nudge (zoom in+out to
+  trigger AF-C), and status queries. No external deps (stdlib only).
+  The camera's WiFi AP uses `192.168.122.0/24` — libvirt's default network was
+  moved to `192.168.124.0/24` to avoid a subnet collision.
+
 ### Non-functional prototypes
 
 - `cast-region.py` — Native GStreamer/PipeWire screen capture prototype. Blocked
@@ -108,9 +119,21 @@ Two system hooks automate recovery:
   `getDisplayMedia()` + canvas crop instead.
 - The tablet is a Samsung Galaxy Tab A7 (SM-T500), Wi-Fi only, Android 12.
   USB tethering works despite being Wi-Fi only.
+- The Sony A6300's WiFi AP hardcodes `192.168.122.0/24`, which collides with
+  libvirt's default `virbr0` bridge. The libvirt default network was moved to
+  `192.168.124.0/24` to fix this.
+- The A6300's Camera Remote API only exposes focus control methods when the
+  full Smart Remote Control app is installed (not Smart Remote Embedded). Sony
+  discontinued PlayMemories Camera Apps, so the upgrade is no longer available.
+  Workaround: use AF-C mode and trigger refocus via a small zoom nudge.
+- The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
+  outputs a low-resolution LCD mirror over HDMI.
+- Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
 
 ## Environment
 
 - Fedora Linux, GNOME 49, Wayland, PipeWire
 - No external Python dependencies — stdlib only
 - Tablet: Android with Chrome
+- Camera: Sony A6300 (ILCE-6300) with E PZ 16-50mm power zoom kit lens, HDMI
+  capture via USB adapter
