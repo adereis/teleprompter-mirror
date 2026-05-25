@@ -23,10 +23,10 @@ firewall-cmd --zone=trusted --change-interface="$IFACE" 2>/dev/null
 logger -t teleprompter "Firewall: $IFACE → trusted zone"
 
 # ADB reverse port forwarding (run as the user who owns the ADB server)
-runuser -u __USER__-- adb reverse tcp:8047 tcp:8047 2>/dev/null
+runuser -u __USER__ -- adb reverse tcp:8047 tcp:8047 2>/dev/null
 logger -t teleprompter "ADB reverse: tablet localhost:8047 → laptop"
 
 # Max brightness for teleprompter readability
-runuser -u __USER__-- adb shell settings put system screen_brightness_mode 0 2>/dev/null
-runuser -u __USER__-- adb shell settings put system screen_brightness 255 2>/dev/null
+runuser -u __USER__ -- adb shell settings put system screen_brightness_mode 0 2>/dev/null
+runuser -u __USER__ -- adb shell settings put system screen_brightness 255 2>/dev/null
 logger -t teleprompter "Tablet brightness set to max"

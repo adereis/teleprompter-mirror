@@ -1,5 +1,7 @@
 rdp-tls.crt
 rdp-tls.key
+.rdp-credentials
 .envrc
 .venv/
 __pycache__/
+.claude/settings.local.json

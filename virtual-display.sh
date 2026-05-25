@@ -7,8 +7,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CERT="$SCRIPT_DIR/rdp-tls.crt"
 KEY="$SCRIPT_DIR/rdp-tls.key"
+CRED_FILE="$SCRIPT_DIR/.rdp-credentials"
 USERNAME="teleprompter"
-PASSWORD="__RDP_PASSWORD__"
 
 cmd_status() {
     echo "=== GNOME Remote Desktop (headless) ==="
@@ -30,14 +30,28 @@ cmd_setup() {
         chmod 600 "$KEY"
     fi
 
+    if [ ! -f "$CRED_FILE" ]; then
+        PASSWORD=$(openssl rand -base64 16)
+        echo "$PASSWORD" > "$CRED_FILE"
+        chmod 600 "$CRED_FILE"
+        echo "Generated new RDP password."
+    else
+        PASSWORD=$(cat "$CRED_FILE")
+    fi
+
     echo "Configuring headless RDP..."
     grdctl --headless rdp set-tls-cert "$CERT" 2>/dev/null
     grdctl --headless rdp set-tls-key "$KEY" 2>/dev/null
     grdctl --headless rdp set-credentials "$USERNAME" "$PASSWORD" 2>/dev/null
     grdctl --headless rdp disable-view-only 2>/dev/null
     grdctl --headless rdp enable 2>/dev/null
-    echo "Done. RDP is enabled on port 3389."
-    echo "Connect from tablet: $(hostname -I | awk '{print $1}'):3389"
+    # RDP should only be accessible from USB-tethered tablet (trusted zone),
+    # not from WiFi or ethernet. Remove from all other zones.
+    for zone in $(firewall-cmd --get-zones); do
+        [ "$zone" = "trusted" ] && continue
+        firewall-cmd --zone="$zone" --remove-port=3389/tcp 2>/dev/null || true
+    done
+    echo "Done. RDP is enabled on port 3389 (trusted zone / USB only)."
     echo "Username: $USERNAME / Password: $PASSWORD"
 }
 

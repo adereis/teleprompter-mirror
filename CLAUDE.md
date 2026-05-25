@@ -53,7 +53,8 @@ Two system hooks automate recovery:
 - `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
   the udev rule. Runs `adb shell am start` as the user.
 - `install-hooks.sh` — Installs all three files to system directories (run
-  with sudo).
+  with sudo). Substitutes `__USER__` placeholders with `$SUDO_USER` so the
+  source files contain no hardcoded usernames.
 
 ### RDP setup
 
