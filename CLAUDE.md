@@ -140,6 +140,41 @@ Two system hooks automate recovery:
   was too broad and would set `never-default yes` on the main ethernet (also USB
   via Thunderbolt), breaking internet connectivity.
 
+## Security and privacy rules
+
+This repo is public. Every commit is auditable. Follow these rules strictly.
+
+### No user-specific values in source files
+
+- **No usernames, hostnames, or MAC addresses** in tracked files. Use
+  placeholders (`__USER__`) and substitute at install time (see `install-hooks.sh`).
+- **No passwords or credentials.** Generate at first run and store outside the
+  repo (e.g., `.rdp-credentials`, which is gitignored).
+- **No WiFi SSIDs or passwords.** Camera/tablet connection details live in
+  NetworkManager profiles, not in code.
+- **Check before committing**: `git diff --cached | grep -iE 'password|secret|ssid'`
+  should return nothing. If a value is user-specific, it doesn't belong in the repo.
+
+### Network isolation
+
+- **Servers bind to localhost only** (`127.0.0.1`). The tablet reaches them via
+  ADB reverse port forwarding. Never bind to `0.0.0.0` or a LAN address.
+- **USB tethering interfaces go in the `trusted` firewall zone** at runtime only
+  (no `--permanent`). All other interfaces stay in their default restricted zones.
+- **Camera WiFi uses a dedicated adapter** (`wlan0`) with `never-default yes` so
+  it never becomes a route to the internet.
+- **RDP (virtual-display.sh)** is restricted to the `trusted` zone. Only the
+  USB-tethered tablet can reach port 3389.
+
+### Dispatcher and system hooks
+
+- **Match tablet connections by NM connection name** (`Wired connection *`), not
+  by interface name patterns. USB interface names (`enp*u*`) are ambiguous — the
+  main ethernet is also USB (via Thunderbolt).
+- **Never set `never-default` or change firewall zones** on named connection
+  profiles (like `Ethernet`). Only auto-created `Wired connection N` profiles
+  should be modified by dispatchers.
+
 ## Environment
 
 - Fedora Linux, GNOME 49, Wayland, PipeWire
