@@ -23,8 +23,7 @@ forwarding (set up automatically by `start-mirror.sh`).
 
 | Path | Purpose |
 |------|---------|
-| `/cast` | Share a window and stream it to the tablet |
-| `/cast-crop` | Share a screen region (draw a crop rectangle) |
+| `/cast` | Share a window and stream it to the tablet (optional crop mode) |
 | `/view` | Tablet viewer (mirrored, fullscreen, auto-reconnect) |
 | `/latency` | Visual latency measurement tool |
 
@@ -70,43 +69,66 @@ configured automatically. Or manually: `./start-mirror.sh reconnect`.
 
 </details>
 
+## Camera control
+
+The Sony A6300 camera can be controlled (zoom, refocus) from the command line
+while HDMI capture stays active. A dedicated USB WiFi adapter connects to the
+camera's WiFi AP, leaving the main WiFi free for internet.
+
+```bash
+./camera-control.py zoom in        # zoom in one step
+./camera-control.py zoom out 2s    # smooth zoom out for 2 seconds
+./camera-control.py zoom set       # go to default framing position
+./camera-control.py refocus        # nudge zoom to trigger AF-C refocus
+./camera-control.py zoom           # show current zoom position
+```
+
+See [CAMERA.md](CAMERA.md) for setup instructions, API details, and
+troubleshooting.
+
 ## How it works
 
-- `cast.html` uses `getDisplayMedia()` to capture a window, then sends it via WebRTC
+- `cast.html` uses `getDisplayMedia()` to capture a window, then sends it via WebRTC.
+  Optional crop mode lets you draw a rectangle to stream only a region.
 - `view.html` receives the stream and displays it fullscreen with horizontal mirror
   (teleprompter effect) and screen wake lock
 - `mirror-server.py` handles signaling (SDP offer/answer exchange) and rewrites
   Chrome's mDNS ICE candidates to real LAN IPs so ICE can connect
+- `camera-control.py` controls the camera via Sony's Camera Remote API (JSON-RPC
+  over WiFi) — zoom, refocus, and status queries
 
 ## Tuning
 
 The cast page is configured for video call mirroring:
 - VP8 preferred (Chrome's libvpx encoder is optimized for real-time WebRTC)
-- 8 Mbps max bitrate, 2x resolution downscale (4K source → 2K encode)
+- 8 Mbps max bitrate, resolution downscaled to match the tablet's viewport
 - 60 fps capture, `contentHint = 'motion'` (smooth faces over sharp text)
 - `jitterBufferTarget = 0` on viewer (minimizes receive-side delay on USB)
 - Live encoder stats shown on the cast page after connection
 
-## RDP Virtual Display (alternative)
+<details>
+<summary>RDP virtual display (alternative)</summary>
 
 For simpler setups (laptop with 1080p screen), GNOME Remote Desktop can mirror the
 primary display to the tablet via RDP — no window selection needed.
 
 ```bash
-./virtual-display.sh setup    # configure headless RDP
+./virtual-display.sh setup    # configure headless RDP (generates random password)
 ./virtual-display.sh status   # check state
 ./virtual-display.sh mirror   # open local preview with wl-mirror
 ./virtual-display.sh stop     # disable
 ```
 
-Connect from the tablet with an RDP client (e.g., Windows App) to `<laptop-ip>:3389`,
-username/password: generated on first `./virtual-display.sh setup`.
+Connect from the tablet with an RDP client (e.g., Windows App) to `<laptop-ip>:3389`.
+Credentials are generated on first setup and stored in `.rdp-credentials`.
+RDP is restricted to the trusted firewall zone (USB tethering interface only).
+
+</details>
 
 ## Requirements
 
-- Fedora Linux with GNOME/Wayland
-- `gnome-remote-desktop` (installed by default)
-- `wl-mirror` (`dnf install wl-mirror`) — for local preview of virtual display
-- Python 3 (standard library only) — for the WebRTC mirror server
+- Linux with GNOME/Wayland
+- Python 3 (standard library only) — for the mirror server and camera control
 - Chrome or Chromium on both laptop and tablet
-- `adb` (optional — for USB tethering setup via `start-mirror.sh`)
+- `adb` — for USB tethering setup and ADB reverse port forwarding
+- USB WiFi adapter (MT7601U or similar) — for camera control (optional)

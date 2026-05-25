@@ -58,7 +58,6 @@ class Handler(BaseHTTPRequestHandler):
         routes = {
             "/": ("redirect", "/cast"),
             "/cast": ("html", "cast.html"),
-            "/cast-crop": ("html", "cast-crop.html"),
             "/latency": ("html", "latency-test.html"),
             "/view": ("html", "view.html"),
             "/offer": ("signal", "_offer"),

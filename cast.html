@@ -14,6 +14,9 @@
   }
   button:hover { background: #1a4a8a; }
   button:disabled { opacity: 0.4; cursor: default; }
+  .crop-btn { background: #2d4a22; }
+  .crop-btn:hover { background: #3d6a32; }
+  .crop-btn.active { background: #4ecca3; color: #1a1a2e; }
   #previewWrap {
     position: relative; margin-top: 1em; max-width: 640px; width: 100%;
     aspect-ratio: 16/9; background: #000; border: 2px dashed #4ecca3;
@@ -24,6 +27,11 @@
     color: #4ecca3; font-size: 11px; font-family: system-ui; opacity: 0.7;
   }
   #preview { width: 100%; height: 100%; object-fit: contain; }
+  #cropCanvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    cursor: crosshair; display: none;
+  }
+  #outputCanvas { position: fixed; top: -9999px; left: -9999px; }
   #status { margin-top: 1em; font-size: 14px; }
   .ok { color: #4ecca3; }
   .wait { color: #f0a500; }
@@ -33,21 +41,41 @@
     color: #888; line-height: 1.6; display: none;
   }
   #stats span { color: #4ecca3; }
+  #cropInfo {
+    margin-top: 0.5em; font-size: 13px; color: #4ecca3; display: none;
+  }
 </style>
 </head>
 <body>
   <h1>Cast</h1>
   <p class="sub">Select a window to share — the tablet viewer will mirror it.</p>
-  <button id="startBtn" onclick="startCast()">Share Window</button>
-  <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
+  <div>
+    <button id="startBtn" onclick="startCast()">Share Window</button>
+    <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
+    <button id="cropBtn" class="crop-btn" onclick="toggleCrop()" style="display:none">Crop</button>
+    <button id="resetCropBtn" onclick="resetCrop()" style="display:none">Reset Crop</button>
+  </div>
   <div id="previewWrap">
     <video id="preview" autoplay muted playsinline></video>
+    <canvas id="cropCanvas"></canvas>
   </div>
+  <canvas id="outputCanvas"></canvas>
+  <div id="cropInfo"></div>
   <div id="status"></div>
   <div id="stats"></div>
 <script>
 let pc = null, dc = null, stream = null, statsInterval = null;
 let viewerW = 0, viewerH = 0;
+
+// Crop state
+let cropMode = false, cropRect = null, cropAnimId = null;
+let dragging = false, dragStart = null, ratioLock = true;
+let cropScale = 1;
+const outputCanvas = document.getElementById('outputCanvas');
+const octx = outputCanvas.getContext('2d');
+const cropCanvas = document.getElementById('cropCanvas');
+const cctx = cropCanvas.getContext('2d');
+const previewVideo = document.getElementById('preview');
 
 function gcd(a, b) { return b ? gcd(b, a % b) : a; }
 function ratioStr(w, h) { const g = gcd(w, h); return `${w/g}:${h/g}`; }
@@ -66,20 +94,21 @@ function onViewport(w, h) {
   sub.innerHTML = `Select a window to share — the tablet viewer will mirror it.<br>` +
     `Optimal window ratio for the viewer: <strong>${r}</strong> (e.g. ${ex1}, ${ex2})`;
 
-  // Update scaling if already streaming
-  if (pc && stream) {
-    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-    if (sender) {
-      const vtrack = stream.getVideoTracks()[0];
-      const settings = vtrack.getSettings();
-      const factor = Math.max(settings.width / w, settings.height / h, 1.0);
-      const params = sender.getParameters();
-      if (params.encodings?.[0]) {
-        if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
-        else delete params.encodings[0].scaleResolutionDownBy;
-        sender.setParameters(params);
-      }
-    }
+  if (pc && stream && !cropMode) updateScaling();
+}
+
+function updateScaling() {
+  const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+  if (!sender) return;
+  const vtrack = stream.getVideoTracks()[0];
+  const settings = vtrack.getSettings();
+  const maxW = viewerW || 1920, maxH = viewerH || 1080;
+  const factor = Math.max(settings.width / maxW, settings.height / maxH, 1.0);
+  const params = sender.getParameters();
+  if (params.encodings?.[0]) {
+    if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
+    else delete params.encodings[0].scaleResolutionDownBy;
+    sender.setParameters(params);
   }
 }
 
@@ -109,11 +138,11 @@ async function startCast() {
       audio: false
     });
 
-    const preview = document.getElementById('preview');
-    preview.srcObject = stream;
+    previewVideo.srcObject = stream;
     document.getElementById('previewWrap').style.display = 'block';
     document.getElementById('startBtn').disabled = true;
     document.getElementById('stopBtn').disabled = false;
+    document.getElementById('cropBtn').style.display = '';
 
     const vtrack = stream.getVideoTracks()[0];
     vtrack.onended = () => stopCast();
@@ -131,8 +160,6 @@ async function startCast() {
     };
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
 
-    // Prefer VP8 — Chrome's libvpx is optimized for real-time WebRTC
-    // and outperforms OpenH264 in software encoding (common on Linux)
     const txc = pc.getTransceivers()[0];
     if (txc && txc.setCodecPreferences) {
       const caps = RTCRtpSender.getCapabilities('video');
@@ -143,7 +170,6 @@ async function startCast() {
       }
     }
 
-    // Downscale to viewer resolution, or 1920px max as a safe default
     const sender = pc.getSenders().find(s => s.track?.kind === 'video');
     if (sender) {
       const settings = vtrack.getSettings();
@@ -196,19 +222,214 @@ async function startCast() {
 }
 
 function stopCast() {
+  disableCrop();
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
   if (pc) { pc.close(); pc = null; }
   stream = null; dc = null;
-  const preview = document.getElementById('preview');
-  preview.srcObject = null;
+  previewVideo.srcObject = null;
   document.getElementById('previewWrap').style.display = 'none';
   document.getElementById('startBtn').disabled = false;
   document.getElementById('stopBtn').disabled = true;
+  document.getElementById('cropBtn').style.display = 'none';
+  document.getElementById('resetCropBtn').style.display = 'none';
   document.getElementById('stats').style.display = 'none';
+  document.getElementById('cropInfo').style.display = 'none';
   status('Stopped.', '');
   fetch('/reset', {method: 'POST'});
 }
+
+// ─── Crop ────────────────────────────────────────────────
+
+function toggleCrop() {
+  if (cropMode) disableCrop();
+  else enableCrop();
+}
+
+function enableCrop() {
+  cropMode = true;
+  const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+  if (!vw || !vh) return;
+
+  cropRect = { x: 0, y: 0, w: vw, h: vh };
+
+  const wrap = document.getElementById('previewWrap');
+  const wrapW = wrap.clientWidth, wrapH = wrap.clientHeight;
+  cropCanvas.width = wrapW;
+  cropCanvas.height = wrapH;
+  cropScale = Math.min(wrapW / vw, wrapH / vh);
+  cropCanvas.style.display = 'block';
+
+  document.getElementById('cropBtn').classList.add('active');
+  document.getElementById('cropBtn').textContent = 'Crop ON';
+  document.getElementById('resetCropBtn').style.display = '';
+  document.getElementById('cropInfo').style.display = 'block';
+  document.getElementById('cropInfo').textContent = 'Draw a rectangle on the preview to crop.';
+
+  renderCropOverlay();
+}
+
+function disableCrop() {
+  if (!cropMode) return;
+  cropMode = false;
+  if (cropAnimId) { cancelAnimationFrame(cropAnimId); cropAnimId = null; }
+  cropCanvas.style.display = 'none';
+  cropRect = null;
+
+  document.getElementById('cropBtn').classList.remove('active');
+  document.getElementById('cropBtn').textContent = 'Crop';
+  document.getElementById('resetCropBtn').style.display = 'none';
+  document.getElementById('cropInfo').style.display = 'none';
+
+  // Switch back to direct stream
+  const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+  if (sender && stream) {
+    sender.replaceTrack(stream.getVideoTracks()[0]);
+    updateScaling();
+  }
+}
+
+function applyCrop() {
+  if (!cropRect || !pc) return;
+  const { x, y, w, h } = cropRect;
+
+  outputCanvas.width = w;
+  outputCanvas.height = h;
+
+  function renderFrame() {
+    octx.drawImage(previewVideo, x, y, w, h, 0, 0, w, h);
+    previewVideo.requestVideoFrameCallback(renderFrame);
+  }
+  previewVideo.requestVideoFrameCallback(renderFrame);
+
+  const croppedStream = outputCanvas.captureStream(60);
+  const croppedTrack = croppedStream.getVideoTracks()[0];
+  croppedTrack.contentHint = 'motion';
+
+  const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+  if (sender) {
+    sender.replaceTrack(croppedTrack);
+    const params = sender.getParameters();
+    if (params.encodings?.[0]) {
+      delete params.encodings[0].scaleResolutionDownBy;
+      sender.setParameters(params);
+    }
+  }
+
+  document.getElementById('cropInfo').textContent = `Streaming cropped ${w}×${h} region`;
+}
+
+function resetCrop() {
+  if (!previewVideo.videoWidth) return;
+  cropRect = { x: 0, y: 0, w: previewVideo.videoWidth, h: previewVideo.videoHeight };
+  document.getElementById('cropInfo').textContent = 'Crop reset — draw a new rectangle or disable crop.';
+
+  // Revert to direct stream
+  const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+  if (sender && stream) {
+    sender.replaceTrack(stream.getVideoTracks()[0]);
+    updateScaling();
+  }
+}
+
+// ─── Crop overlay rendering ──────────────────────────────
+
+function renderCropOverlay() {
+  if (!cropMode) return;
+  const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+  const cw = cropCanvas.width, ch = cropCanvas.height;
+  cctx.clearRect(0, 0, cw, ch);
+
+  if (!cropRect || (cropRect.x === 0 && cropRect.y === 0 &&
+      cropRect.w === vw && cropRect.h === vh)) {
+    // Full frame — show viewer aspect ratio guide
+    if (viewerW && viewerH) {
+      const vr = viewerW / viewerH;
+      const sr = vw / vh;
+      let gw, gh;
+      if (sr > vr) { gh = ch; gw = Math.round(gh * vr); }
+      else { gw = cw; gh = Math.round(gw / vr); }
+      const gx = Math.round((cw - gw) / 2), gy = Math.round((ch - gh) / 2);
+      cctx.strokeStyle = 'rgba(78,204,163,0.6)';
+      cctx.lineWidth = 2;
+      cctx.setLineDash([6, 3]);
+      cctx.strokeRect(gx, gy, gw, gh);
+      cctx.setLineDash([]);
+    }
+    cropAnimId = requestAnimationFrame(renderCropOverlay);
+    return;
+  }
+
+  const cx = cropRect.x * cropScale, cy = cropRect.y * cropScale;
+  const rw = cropRect.w * cropScale, rh = cropRect.h * cropScale;
+
+  // Dim outside crop
+  cctx.fillStyle = 'rgba(0,0,0,0.45)';
+  cctx.fillRect(0, 0, cw, cy);
+  cctx.fillRect(0, cy + rh, cw, ch - cy - rh);
+  cctx.fillRect(0, cy, cx, rh);
+  cctx.fillRect(cx + rw, cy, cw - cx - rw, rh);
+
+  // Crop border
+  cctx.strokeStyle = '#4ecca3';
+  cctx.lineWidth = 2;
+  cctx.setLineDash([6, 3]);
+  cctx.strokeRect(cx, cy, rw, rh);
+  cctx.setLineDash([]);
+
+  // Label
+  const cr = (cropRect.w / cropRect.h).toFixed(2);
+  cctx.fillStyle = '#4ecca3';
+  cctx.font = '12px system-ui';
+  cctx.fillText(`${cropRect.w}×${cropRect.h}  ratio ${cr}`, cx + 4, Math.max(12, cy - 5));
+
+  cropAnimId = requestAnimationFrame(renderCropOverlay);
+}
+
+// ─── Mouse crop selection ────────────────────────────────
+
+function canvasToVideo(e) {
+  const r = cropCanvas.getBoundingClientRect();
+  return {
+    x: Math.round(Math.max(0, Math.min(previewVideo.videoWidth,  (e.clientX - r.left) / cropScale))),
+    y: Math.round(Math.max(0, Math.min(previewVideo.videoHeight, (e.clientY - r.top)  / cropScale)))
+  };
+}
+
+cropCanvas.addEventListener('mousedown', e => {
+  dragStart = canvasToVideo(e);
+  dragging = true;
+});
+
+cropCanvas.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const p = canvasToVideo(e);
+  let w = Math.abs(p.x - dragStart.x);
+  let h = Math.abs(p.y - dragStart.y);
+  if (ratioLock && viewerW && viewerH && w > 16 && h > 16) {
+    h = Math.round(w / (viewerW / viewerH));
+  }
+  const x = Math.min(dragStart.x, p.x);
+  const y = p.y < dragStart.y ? dragStart.y - h : dragStart.y;
+  cropRect = {
+    x: Math.max(0, x), y: Math.max(0, y),
+    w: Math.min(w, previewVideo.videoWidth - x),
+    h: Math.min(h, previewVideo.videoHeight - y)
+  };
+});
+
+cropCanvas.addEventListener('mouseup', () => {
+  dragging = false;
+  if (!cropRect || cropRect.w < 16 || cropRect.h < 16) {
+    resetCrop();
+    return;
+  }
+  document.getElementById('cropInfo').textContent =
+    `Crop: ${cropRect.w}×${cropRect.h} @ (${cropRect.x},${cropRect.y})`;
+  applyCrop();
+});
+
+// ─── Stats ───────────────────────────────────────────────
 
 let prevStats = {};
 function startStats() {
@@ -228,7 +449,8 @@ function startStats() {
         const dt = (s.timestamp - prevTs) / 1000;
         const kbps = dt > 0 ? Math.round(((s.bytesSent - prevBytes) * 8 / 1000) / dt) : 0;
         const ql = s.qualityLimitationReason || 'none';
-        out.encode = `Encode: <span>${encMs}ms/frame</span>  ${w}x${h} @ <span>${fps}fps</span>`;
+        const cropLabel = cropMode && cropRect ? ' (cropped)' : '';
+        out.encode = `Encode: <span>${encMs}ms/frame</span>  ${w}x${h}${cropLabel} @ <span>${fps}fps</span>`;
         out.bitrate = `Bitrate: <span>${kbps} kbps</span>  Quality limit: <span>${ql}</span>`;
         prevStats = {bytesSent: s.bytesSent, timestamp: s.timestamp};
       }

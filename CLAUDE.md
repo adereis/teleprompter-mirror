@@ -24,9 +24,10 @@ Two approaches exist:
 - `cast.html` — Laptop-side. Uses `getDisplayMedia()` + `RTCPeerConnection` to
   capture and send a window. Shows WebRTC stats (encode time, FPS, bitrate, RTT,
   jitter) after connection. Downscales 2x before encoding to reduce VP8 CPU load.
-- `cast-crop.html` — Experimental. Like `cast.html` but adds a canvas-based crop
-  step: capture full screen, draw a rectangle to select a region, stream only that
-  region. Uses `requestVideoFrameCallback` for frame-synced rendering.
+  Optional crop mode: click "Crop" to draw a rectangle and stream only that region
+  via canvas + `requestVideoFrameCallback`. Uses `replaceTrack()` to switch between
+  direct and cropped streams without reconnecting. Crop adds a canvas step to the
+  pipeline; when disabled, the stream goes direct (no extra latency).
 - `view.html` — Tablet-side. Receives WebRTC stream and displays it fullscreen with
   horizontal flip (`scaleX(-1)` for teleprompter mirror effect). Sets
   `jitterBufferTarget=0` to minimize receive-side buffering on USB. Requests
@@ -117,7 +118,7 @@ Two system hooks automate recovery:
   streams on GNOME 49 / PipeWire 1.4.x. GNOME creates the screencast node
   with `object.register=false`, making it invisible to pipewiresrc's
   registry-based discovery. The `cast-region.py` prototype is blocked by
-  this. The workaround is `cast-crop.html`, which uses Chrome's
+  this. The workaround is `cast.html`'s crop mode, which uses Chrome's
   `getDisplayMedia()` + canvas crop instead.
 - The tablet is a Samsung Galaxy Tab A7 (SM-T500), Wi-Fi only, Android 12.
   USB tethering works despite being Wi-Fi only.
