@@ -27,7 +27,7 @@ forwarding (set up automatically by `start-mirror.sh`).
 | `/view` | Tablet viewer (mirrored, fullscreen, auto-reconnect) |
 | `/latency` | Visual latency measurement tool |
 
-## USB tethering (recommended)
+## USB tethering
 
 USB tethering provides lower latency (~90ms) and a secure direct link.
 Use a **data-capable USB cable** — charge-only cables silently fail.
@@ -105,25 +105,6 @@ The cast page is configured for video call mirroring:
 - 60 fps capture, `contentHint = 'motion'` (smooth faces over sharp text)
 - `jitterBufferTarget = 0` on viewer (minimizes receive-side delay on USB)
 - Live encoder stats shown on the cast page after connection
-
-<details>
-<summary>RDP virtual display (alternative)</summary>
-
-For simpler setups (laptop with 1080p screen), GNOME Remote Desktop can mirror the
-primary display to the tablet via RDP — no window selection needed.
-
-```bash
-./virtual-display.sh setup    # configure headless RDP (generates random password)
-./virtual-display.sh status   # check state
-./virtual-display.sh mirror   # open local preview with wl-mirror
-./virtual-display.sh stop     # disable
-```
-
-Connect from the tablet with an RDP client (e.g., Windows App) to `<laptop-ip>:3389`.
-Credentials are generated on first setup and stored in `.rdp-credentials`.
-RDP is restricted to the trusted firewall zone (USB tethering interface only).
-
-</details>
 
 ## Requirements
 

@@ -1,6 +1,3 @@
-rdp-tls.crt
-rdp-tls.key
-.rdp-credentials
 .envrc
 .venv/
 __pycache__/
