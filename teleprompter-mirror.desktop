@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Teleprompter Mirror
+Comment=Mirror a window to the tablet for eye contact during calls
+Exec=__PROJECT_DIR__/open-cast.sh
+Icon=video-display
+Type=Application
+Categories=Utility;
+StartupWMClass=localhost

@@ -106,11 +106,32 @@ menu after changing modes.
 5. `wlan0` auto-connects to the camera via the `Camera-A6300` NM profile
 6. Test: `./camera-control.py zoom`
 
-The `Camera-A6300` profile is pre-configured with:
+Create the `Camera-A6300` NetworkManager profile (first time only):
+
+```bash
+nmcli connection add type wifi con-name Camera-A6300 \
+  ssid "DIRECT-xxxx:ILCE-6300" \
+  ifname wlan0 \
+  wifi-sec.key-mgmt wpa-psk wifi-sec.psk "your-camera-password" \
+  ipv4.never-default yes \
+  connection.autoconnect yes \
+  connection.autoconnect-priority -100
+```
+
+Replace the SSID and password with the values shown on the camera's Smart
+Remote Embedded screen. The profile settings:
 - `ifname wlan0` — only uses the USB adapter, never the main WiFi
 - `ipv4.never-default yes` — never steals the default route
 - `connection.autoconnect yes` — connects when the camera's AP is visible
 - `connection.autoconnect-priority -100` — lowest priority
+
+If the camera is reset and gets a new SSID/password:
+
+```bash
+nmcli connection modify Camera-A6300 \
+  802-11-wireless.ssid "DIRECT-newSSID:ILCE-6300" \
+  wifi-sec.psk "new-password"
+```
 
 ### Subnet collision with libvirt
 
@@ -118,9 +139,16 @@ The camera hardcodes `192.168.122.0/24` for its WiFi AP. This is the same
 subnet libvirt uses by default for `virbr0`. When both are present, traffic
 to `192.168.122.1` hits the bridge instead of the camera.
 
-Fix: the libvirt default network was moved to `192.168.124.0/24` in
-`/etc/libvirt/qemu/networks/default.xml`. This persists across reboots.
-VMs need a DHCP renew or reboot after the change.
+Fix: move libvirt's default network to a different subnet:
+
+```bash
+sudo virsh net-destroy default
+sudo virsh net-edit default   # change 192.168.122 → 192.168.124
+sudo virsh net-start default
+```
+
+This persists across reboots. VMs need a DHCP renew or reboot after
+the change.
 
 ### USB control alternative (gphoto2)
 

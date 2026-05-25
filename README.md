@@ -42,7 +42,7 @@ If the tablet is connected through a USB KVM switch, switching away and back res
 the USB tethering. Install the system hooks to automate recovery:
 
 ```bash
-sudo ./install-hooks.sh
+sudo ./install.sh
 ```
 
 After a KVM switch: accept the USB debugging prompt on the tablet → tethering settings

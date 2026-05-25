@@ -51,9 +51,12 @@ Two system hooks automate recovery:
   zone), and ADB reverse port forwarding. No user action needed.
 - `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
   the udev rule. Runs `adb shell am start` as the user.
-- `install-hooks.sh` — Installs all three files to system directories (run
-  with sudo). Substitutes `__USER__` placeholders with `$SUDO_USER` so the
-  source files contain no hardcoded usernames.
+- `install.sh` — Installs system hooks and desktop entry (run with sudo).
+  Substitutes `__USER__` and `__PROJECT_DIR__` placeholders with runtime
+  values so the source files contain no hardcoded paths or usernames.
+- `uninstall.sh` — Removes all files installed by `install.sh`.
+- `teleprompter-mirror.desktop` — Desktop entry template. Installed to
+  `~/.local/share/applications/` by `install.sh`.
 
 ### Camera control
 
@@ -133,7 +136,8 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
 ### No user-specific values in source files
 
 - **No usernames, hostnames, or MAC addresses** in tracked files. Use
-  placeholders (`__USER__`) and substitute at install time (see `install-hooks.sh`).
+  placeholders (`__USER__`, `__PROJECT_DIR__`) and substitute at install time
+  (see `install.sh`).
 - **No passwords or credentials.** Generate at first run and store outside the
   repo.
 - **No WiFi SSIDs or passwords.** Camera/tablet connection details live in
