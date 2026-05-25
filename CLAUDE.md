@@ -68,10 +68,11 @@ Two system hooks automate recovery:
 
 - `camera-control.py` — Controls the Sony A6300 camera via Sony's Camera Remote
   API (JSON-RPC over WiFi). Requires the camera to be in Movie mode with Smart
-  Remote Embedded running. The laptop connects to the camera's WiFi AP
-  (`DIRECT-xxxx:ILCE-6300`) while HDMI capture continues working simultaneously.
-  Supports zoom in/out (power zoom lens only), refocus nudge (zoom in+out to
-  trigger AF-C), and status queries. No external deps (stdlib only).
+  Remote Embedded running. A dedicated USB WiFi adapter (MT7601U, `wlan0`) connects
+  to the camera's WiFi AP (`DIRECT-xxxx:ILCE-6300`) via the `Camera-A6300` NM
+  profile, leaving the main WiFi free for internet. HDMI capture continues working
+  simultaneously. Supports zoom in/out (power zoom lens only), refocus nudge
+  (zoom in+out to trigger AF-C), and status queries. No external deps (stdlib only).
   The camera's WiFi AP uses `192.168.122.0/24` — libvirt's default network was
   moved to `192.168.124.0/24` to avoid a subnet collision.
 
@@ -129,6 +130,14 @@ Two system hooks automate recovery:
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
+  A dedicated USB WiFi adapter (MT7601U, `wlan0`) connects to the camera via the
+  `Camera-A6300` NM profile, so the main WiFi (`wlp9s0`) stays on the home/office
+  network. The profile auto-connects when the camera's AP is visible.
+- The `99-teleprompter` NM dispatcher must only match tablet USB tethering
+  connections, not all USB ethernet. It matches by NM connection name
+  (`Wired connection *`), not by interface name pattern. The old `enp*u*` pattern
+  was too broad and would set `never-default yes` on the main ethernet (also USB
+  via Thunderbolt), breaking internet connectivity.
 
 ## Environment
 

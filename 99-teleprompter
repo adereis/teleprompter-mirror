@@ -5,18 +5,18 @@
 IFACE="$1"
 ACTION="$2"
 
-case "$IFACE" in usb*|enp*u*|enx*) ;; *) exit 0 ;; esac
 [ "$ACTION" = "up" ] || exit 0
 
-logger -t teleprompter "USB interface $IFACE came up — configuring"
+# Only act on the tablet USB tethering connection, not other USB ethernet
+CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
+case "$CONN" in "Wired connection"*) ;; *) exit 0 ;; esac
+
+logger -t teleprompter "Tablet tethering on $IFACE ($CONN) — configuring"
 
 # Fix routing so USB tethering doesn't steal the default route
-CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
-if [ -n "$CONN" ]; then
-    nmcli connection modify "$CONN" ipv4.never-default yes ipv6.never-default yes 2>/dev/null
-    ip route del default dev "$IFACE" 2>/dev/null
-    logger -t teleprompter "Set never-default on '$CONN'"
-fi
+nmcli connection modify "$CONN" ipv4.never-default yes ipv6.never-default yes 2>/dev/null
+ip route del default dev "$IFACE" 2>/dev/null
+logger -t teleprompter "Set never-default on '$CONN'"
 
 # Trust USB interface for WebRTC media (UDP)
 firewall-cmd --zone=trusted --change-interface="$IFACE" 2>/dev/null

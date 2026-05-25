@@ -99,16 +99,18 @@ menu after changing modes.
 ### First-time setup
 
 1. Connect the camera's HDMI output to the USB capture adapter
-2. Set the camera mode dial to **Movie**
-3. On the camera: MENU -> Application -> Application List -> Smart Remote
+2. Plug in the dedicated USB WiFi adapter (MT7601U) — it appears as `wlan0`
+3. Set the camera mode dial to **Movie**
+4. On the camera: MENU -> Application -> Application List -> Smart Remote
    Embedded
-4. The camera displays its WiFi SSID and password
-5. Connect from Linux:
-   ```bash
-   nmcli device wifi connect "DIRECT-xxxx:ILCE-6300" password "password"
-   nmcli connection modify "DIRECT-xxxx:ILCE-6300" ipv4.never-default yes
-   ```
-6. Test: `./camera-control.py discover`
+5. `wlan0` auto-connects to the camera via the `Camera-A6300` NM profile
+6. Test: `./camera-control.py zoom`
+
+The `Camera-A6300` profile is pre-configured with:
+- `ifname wlan0` — only uses the USB adapter, never the main WiFi
+- `ipv4.never-default yes` — never steals the default route
+- `connection.autoconnect yes` — connects when the camera's AP is visible
+- `connection.autoconnect-priority -100` — lowest priority
 
 ### Subnet collision with libvirt
 
