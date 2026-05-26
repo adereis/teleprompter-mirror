@@ -83,7 +83,9 @@ let viewerW = 0, viewerH = 0;
 let cropMode = false, cropRect = null, cropAnimId = null;
 let dragging = false, dragStart = null, ratioLock = true;
 let cropScale = 1;
-let cropRenderToken = null;
+let interactionMode = 'none';
+let moveOffset = null, resizeAnchor = null, cropRenderToken = null;
+const HANDLE_SIZE = 10, MIN_CROP = 16;
 const outputCanvas = document.getElementById('outputCanvas');
 const octx = outputCanvas.getContext('2d');
 const cropCanvas = document.getElementById('cropCanvas');
@@ -344,6 +346,10 @@ function disableCrop() {
   if (!cropMode) return;
   cropMode = false;
   cropRenderToken = null;
+  dragging = false;
+  interactionMode = 'none';
+  moveOffset = null;
+  resizeAnchor = null;
   if (cropAnimId) { cancelAnimationFrame(cropAnimId); cropAnimId = null; }
   cropCanvas.style.display = 'none';
   cropRect = null;
@@ -382,6 +388,10 @@ function applyCrop() {
 function resetCrop() {
   if (!previewVideo.videoWidth) return;
   cropRenderToken = null;
+  dragging = false;
+  interactionMode = 'none';
+  moveOffset = null;
+  resizeAnchor = null;
   cropRect = { x: 0, y: 0, w: previewVideo.videoWidth, h: previewVideo.videoHeight };
   document.getElementById('cropInfo').textContent = 'Crop reset — draw a new rectangle or disable crop.';
 
@@ -406,14 +416,18 @@ function videoDisplayRect() {
   };
 }
 
+function isFullFrame() {
+  return !cropRect || (cropRect.x === 0 && cropRect.y === 0 &&
+    cropRect.w === previewVideo.videoWidth && cropRect.h === previewVideo.videoHeight);
+}
+
 function renderCropOverlay() {
   if (!cropMode) return;
   const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
   const cw = cropCanvas.width, ch = cropCanvas.height;
   cctx.clearRect(0, 0, cw, ch);
 
-  if (!cropRect || (cropRect.x === 0 && cropRect.y === 0 &&
-      cropRect.w === vw && cropRect.h === vh)) {
+  if (isFullFrame()) {
     // Full frame — show viewer aspect ratio guide
     if (viewerW && viewerH) {
       const vd = videoDisplayRect();
@@ -451,6 +465,15 @@ function renderCropOverlay() {
   cctx.strokeRect(cx, cy, rw, rh);
   cctx.setLineDash([]);
 
+  // Resize handles
+  const hs = 5;
+  cctx.fillStyle = '#4ecca3';
+  for (const [hx, hy] of [
+    [cx, cy], [cx + rw/2, cy], [cx + rw, cy],
+    [cx, cy + rh/2], [cx + rw, cy + rh/2],
+    [cx, cy + rh], [cx + rw/2, cy + rh], [cx + rw, cy + rh]
+  ]) cctx.fillRect(hx - hs, hy - hs, hs * 2, hs * 2);
+
   // Label
   const cr = (cropRect.w / cropRect.h).toFixed(2);
   cctx.fillStyle = '#4ecca3';
@@ -471,36 +494,140 @@ function canvasToVideo(e) {
   };
 }
 
+function hitTestCrop(canvasX, canvasY) {
+  if (isFullFrame()) return 'none';
+  const vd = videoDisplayRect();
+  const cx = cropRect.x * cropScale + vd.x, cy = cropRect.y * cropScale + vd.y;
+  const rw = cropRect.w * cropScale, rh = cropRect.h * cropScale;
+  const hs = HANDLE_SIZE;
+  // Corners
+  if (Math.abs(canvasX - cx) < hs && Math.abs(canvasY - cy) < hs) return 'resize-nw';
+  if (Math.abs(canvasX - (cx + rw)) < hs && Math.abs(canvasY - cy) < hs) return 'resize-ne';
+  if (Math.abs(canvasX - cx) < hs && Math.abs(canvasY - (cy + rh)) < hs) return 'resize-sw';
+  if (Math.abs(canvasX - (cx + rw)) < hs && Math.abs(canvasY - (cy + rh)) < hs) return 'resize-se';
+  // Edges
+  if (canvasX > cx + hs && canvasX < cx + rw - hs) {
+    if (Math.abs(canvasY - cy) < hs) return 'resize-n';
+    if (Math.abs(canvasY - (cy + rh)) < hs) return 'resize-s';
+  }
+  if (canvasY > cy + hs && canvasY < cy + rh - hs) {
+    if (Math.abs(canvasX - cx) < hs) return 'resize-w';
+    if (Math.abs(canvasX - (cx + rw)) < hs) return 'resize-e';
+  }
+  // Interior
+  if (canvasX > cx + hs && canvasX < cx + rw - hs &&
+      canvasY > cy + hs && canvasY < cy + rh - hs) return 'move';
+  return 'none';
+}
+
+function cursorForHit(hit) {
+  const map = {
+    'move': 'move',
+    'resize-nw': 'nwse-resize', 'resize-se': 'nwse-resize',
+    'resize-ne': 'nesw-resize', 'resize-sw': 'nesw-resize',
+    'resize-n': 'ns-resize', 'resize-s': 'ns-resize',
+    'resize-e': 'ew-resize', 'resize-w': 'ew-resize'
+  };
+  return map[hit] || 'crosshair';
+}
+
+function getResizeAnchor(dir) {
+  switch (dir) {
+    case 'nw': return { x: cropRect.x + cropRect.w, y: cropRect.y + cropRect.h };
+    case 'ne': return { x: cropRect.x, y: cropRect.y + cropRect.h };
+    case 'sw': return { x: cropRect.x + cropRect.w, y: cropRect.y };
+    case 'se': return { x: cropRect.x, y: cropRect.y };
+    case 'n':  return { x: cropRect.x, y: cropRect.y + cropRect.h };
+    case 's':  return { x: cropRect.x, y: cropRect.y };
+    case 'w':  return { x: cropRect.x + cropRect.w, y: cropRect.y };
+    case 'e':  return { x: cropRect.x, y: cropRect.y };
+  }
+}
+
+function resizeCrop(dir, pos) {
+  const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+  const a = resizeAnchor;
+  if (dir.length === 2) {
+    // Corner — both axes move, ratio lock applies
+    let w = Math.abs(pos.x - a.x), h = Math.abs(pos.y - a.y);
+    if (ratioLock && viewerW && viewerH && w > MIN_CROP)
+      h = Math.round(w / (viewerW / viewerH));
+    let x = pos.x < a.x ? a.x - w : a.x;
+    let y = pos.y < a.y ? a.y - h : a.y;
+    x = Math.max(0, x); y = Math.max(0, y);
+    w = Math.min(w, vw - x); h = Math.min(h, vh - y);
+    cropRect = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+  } else {
+    // Edge — single axis, no ratio lock
+    switch (dir) {
+      case 'n': { const t = Math.max(0, Math.min(pos.y, a.y - MIN_CROP));
+        cropRect.y = Math.round(t); cropRect.h = Math.round(a.y - t); break; }
+      case 's': cropRect.h = Math.round(Math.min(Math.max(MIN_CROP, pos.y - a.y), vh - a.y)); break;
+      case 'w': { const l = Math.max(0, Math.min(pos.x, a.x - MIN_CROP));
+        cropRect.x = Math.round(l); cropRect.w = Math.round(a.x - l); break; }
+      case 'e': cropRect.w = Math.round(Math.min(Math.max(MIN_CROP, pos.x - a.x), vw - a.x)); break;
+    }
+  }
+}
+
 cropCanvas.addEventListener('mousedown', e => {
-  dragStart = canvasToVideo(e);
+  const r = cropCanvas.getBoundingClientRect();
+  const hit = hitTestCrop(e.clientX - r.left, e.clientY - r.top);
+  if (hit === 'move') {
+    interactionMode = 'move';
+    const p = canvasToVideo(e);
+    moveOffset = { x: p.x - cropRect.x, y: p.y - cropRect.y };
+  } else if (hit.startsWith('resize-')) {
+    interactionMode = hit;
+    resizeAnchor = getResizeAnchor(hit.slice(7));
+  } else {
+    interactionMode = 'new';
+    dragStart = canvasToVideo(e);
+  }
   dragging = true;
 });
 
 cropCanvas.addEventListener('mousemove', e => {
-  if (!dragging) return;
-  const p = canvasToVideo(e);
-  let w = Math.abs(p.x - dragStart.x);
-  let h = Math.abs(p.y - dragStart.y);
-  if (ratioLock && viewerW && viewerH && w > 16 && h > 16) {
-    h = Math.round(w / (viewerW / viewerH));
+  if (!dragging) {
+    const r = cropCanvas.getBoundingClientRect();
+    cropCanvas.style.cursor = cursorForHit(hitTestCrop(e.clientX - r.left, e.clientY - r.top));
+    return;
   }
-  const x = Math.min(dragStart.x, p.x);
-  const y = p.y < dragStart.y ? dragStart.y - h : dragStart.y;
-  cropRect = {
-    x: Math.max(0, x), y: Math.max(0, y),
-    w: Math.min(w, previewVideo.videoWidth - x),
-    h: Math.min(h, previewVideo.videoHeight - y)
-  };
+  const p = canvasToVideo(e);
+  if (interactionMode === 'move') {
+    const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+    cropRect.x = Math.round(Math.max(0, Math.min(p.x - moveOffset.x, vw - cropRect.w)));
+    cropRect.y = Math.round(Math.max(0, Math.min(p.y - moveOffset.y, vh - cropRect.h)));
+  } else if (interactionMode.startsWith('resize-')) {
+    resizeCrop(interactionMode.slice(7), p);
+  } else {
+    let w = Math.abs(p.x - dragStart.x), h = Math.abs(p.y - dragStart.y);
+    if (ratioLock && viewerW && viewerH && w > MIN_CROP && h > MIN_CROP)
+      h = Math.round(w / (viewerW / viewerH));
+    const x = Math.min(dragStart.x, p.x);
+    const y = p.y < dragStart.y ? dragStart.y - h : dragStart.y;
+    cropRect = {
+      x: Math.max(0, x), y: Math.max(0, y),
+      w: Math.min(w, previewVideo.videoWidth - x),
+      h: Math.min(h, previewVideo.videoHeight - y)
+    };
+  }
 });
 
-cropCanvas.addEventListener('mouseup', () => {
+cropCanvas.addEventListener('mouseup', e => {
   dragging = false;
-  if (!cropRect || cropRect.w < 16 || cropRect.h < 16) {
+  const wasMode = interactionMode;
+  interactionMode = 'none';
+  moveOffset = null;
+  resizeAnchor = null;
+  if (!cropRect || cropRect.w < MIN_CROP || cropRect.h < MIN_CROP) {
     resetCrop();
     return;
   }
+  const r = cropCanvas.getBoundingClientRect();
+  cropCanvas.style.cursor = cursorForHit(hitTestCrop(e.clientX - r.left, e.clientY - r.top));
   document.getElementById('cropInfo').textContent =
-    `Crop: ${cropRect.w}×${cropRect.h} @ (${cropRect.x},${cropRect.y})`;
+    `Crop: ${cropRect.w}×${cropRect.h} @ (${cropRect.x},${cropRect.y}) — drag to move, edges to resize`;
   applyCrop();
 });
 
@@ -538,6 +665,7 @@ function startStats() {
     el.innerHTML = [out.encode, out.bitrate, out.net].filter(Boolean).join('<br>');
   }, 1000);
 }
+
 </script>
 </body>
 </html>
