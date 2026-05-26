@@ -15,6 +15,13 @@
     text-align: center; padding: 2em;
   }
   #overlay.hidden { display: none; }
+  #jitter {
+    position: fixed; top: 8px; right: 8px;
+    font: 40px/1 monospace; padding: 6px 14px;
+    border-radius: 4px; background: rgba(0,0,0,0.5);
+    color: #4ecca3; z-index: 10; display: none;
+    transform: scaleX(-1);
+  }
   #overlay span {
     animation: drift-x 23s ease-in-out infinite alternate,
                drift-y 17s ease-in-out infinite alternate;
@@ -25,6 +32,7 @@
 </head>
 <body>
   <video id="video" autoplay playsinline muted></video>
+  <div id="jitter"></div>
   <div id="overlay"><span>Waiting for cast…</span></div>
 <script>
 const overlay = document.getElementById('overlay');
@@ -111,6 +119,26 @@ async function keepAwake() {
   } catch (_) {}
 }
 keepAwake();
+
+// Jitter buffer depth monitor (sliding window over last 2s)
+let prevJB = null;
+setInterval(async () => {
+  if (!pc) return;
+  const el = document.getElementById('jitter');
+  const report = await pc.getStats();
+  report.forEach(s => {
+    if (s.type !== 'inbound-rtp' || s.kind !== 'video') return;
+    const d = s.jitterBufferDelay, c = s.jitterBufferEmittedCount;
+    if (d == null || c == null) return;
+    if (prevJB && c > prevJB.c) {
+      const ms = ((d - prevJB.d) / (c - prevJB.c) * 1000).toFixed(0);
+      el.style.display = 'block';
+      el.textContent = `${ms}ms`;
+      el.style.color = ms < 80 ? '#4ecca3' : ms < 200 ? '#f0a500' : '#e74c3c';
+    }
+    prevJB = { d, c };
+  });
+}, 2000);
 
 document.body.addEventListener('click', () => {
   if (!document.fullscreenElement)
