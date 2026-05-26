@@ -148,7 +148,7 @@ async function startCast() {
     status('Select a window to share…', 'wait');
 
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {cursor: 'always', frameRate: {ideal: 60, max: 60}},
+      video: {cursor: 'always', frameRate: {ideal: 30, max: 30}},
       audio: false
     });
 
@@ -212,7 +212,7 @@ async function connect() {
     const params = sender.getParameters();
     if (params.encodings && params.encodings[0]) {
       params.encodings[0].maxBitrate = 8_000_000;
-      params.encodings[0].maxFramerate = 60;
+      params.encodings[0].maxFramerate = 30;
       if (!cropMode && factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
       params.degradationPreference = 'maintain-resolution';
       await sender.setParameters(params);
@@ -287,7 +287,7 @@ function getOrCreateCroppedTrack() {
     requestAnimationFrame(renderFrame);
   }
   requestAnimationFrame(renderFrame);
-  const croppedStream = outputCanvas.captureStream(60);
+  const croppedStream = outputCanvas.captureStream(30);
   const track = croppedStream.getVideoTracks()[0];
   track.contentHint = 'motion';
   return track;
