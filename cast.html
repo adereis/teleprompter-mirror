@@ -389,6 +389,17 @@ function resetCrop() {
 
 // ─── Crop overlay rendering ──────────────────────────────
 
+// Video display rect within the canvas, accounting for object-fit:contain letterboxing
+function videoDisplayRect() {
+  const displayW = previewVideo.videoWidth * cropScale;
+  const displayH = previewVideo.videoHeight * cropScale;
+  return {
+    x: (cropCanvas.width - displayW) / 2,
+    y: (cropCanvas.height - displayH) / 2,
+    w: displayW, h: displayH
+  };
+}
+
 function renderCropOverlay() {
   if (!cropMode) return;
   const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
@@ -399,12 +410,13 @@ function renderCropOverlay() {
       cropRect.w === vw && cropRect.h === vh)) {
     // Full frame — show viewer aspect ratio guide
     if (viewerW && viewerH) {
+      const vd = videoDisplayRect();
       const vr = viewerW / viewerH;
       const sr = vw / vh;
       let gw, gh;
-      if (sr > vr) { gh = ch; gw = Math.round(gh * vr); }
-      else { gw = cw; gh = Math.round(gw / vr); }
-      const gx = Math.round((cw - gw) / 2), gy = Math.round((ch - gh) / 2);
+      if (sr > vr) { gh = vd.h; gw = Math.round(gh * vr); }
+      else { gw = vd.w; gh = Math.round(gw / vr); }
+      const gx = Math.round(vd.x + (vd.w - gw) / 2), gy = Math.round(vd.y + (vd.h - gh) / 2);
       cctx.strokeStyle = 'rgba(78,204,163,0.6)';
       cctx.lineWidth = 2;
       cctx.setLineDash([6, 3]);
@@ -415,7 +427,8 @@ function renderCropOverlay() {
     return;
   }
 
-  const cx = cropRect.x * cropScale, cy = cropRect.y * cropScale;
+  const vd = videoDisplayRect();
+  const cx = cropRect.x * cropScale + vd.x, cy = cropRect.y * cropScale + vd.y;
   const rw = cropRect.w * cropScale, rh = cropRect.h * cropScale;
 
   // Dim outside crop
@@ -445,9 +458,10 @@ function renderCropOverlay() {
 
 function canvasToVideo(e) {
   const r = cropCanvas.getBoundingClientRect();
+  const vd = videoDisplayRect();
   return {
-    x: Math.round(Math.max(0, Math.min(previewVideo.videoWidth,  (e.clientX - r.left) / cropScale))),
-    y: Math.round(Math.max(0, Math.min(previewVideo.videoHeight, (e.clientY - r.top)  / cropScale)))
+    x: Math.round(Math.max(0, Math.min(previewVideo.videoWidth,  (e.clientX - r.left - vd.x) / cropScale))),
+    y: Math.round(Math.max(0, Math.min(previewVideo.videoHeight, (e.clientY - r.top - vd.y)  / cropScale)))
   };
 }
 
