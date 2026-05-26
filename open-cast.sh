@@ -4,6 +4,7 @@
 
 PORT=${1:-8047}
 URL="http://localhost:$PORT/cast"
+WM_CLASS=teleprompter-mirror
 
 if ! curl -s -o /dev/null --connect-timeout 1 "$URL"; then
     echo "Mirror server not running on port $PORT."
@@ -11,4 +12,4 @@ if ! curl -s -o /dev/null --connect-timeout 1 "$URL"; then
     exit 1
 fi
 
-exec google-chrome --app="$URL" 2>/dev/null
+exec google-chrome --app="$URL" --class="$WM_CLASS" 2>/dev/null

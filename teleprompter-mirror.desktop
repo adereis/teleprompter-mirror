@@ -5,4 +5,4 @@ Exec=__PROJECT_DIR__/open-cast.sh
 Icon=video-display
 Type=Application
 Categories=Utility;
-StartupWMClass=localhost
+StartupWMClass=teleprompter-mirror

@@ -64,6 +64,18 @@
   <div id="status"></div>
   <div id="stats"></div>
 <script>
+// Singleton: close duplicate windows via BroadcastChannel
+const singletonBC = new BroadcastChannel('teleprompter-singleton');
+let isSingletonPrimary = false;
+singletonBC.onmessage = (e) => {
+  if (e.data === 'new-instance' && isSingletonPrimary)
+    singletonBC.postMessage('already-running');
+  else if (e.data === 'already-running')
+    window.close();
+};
+singletonBC.postMessage('new-instance');
+setTimeout(() => { isSingletonPrimary = true; }, 500);
+
 let pc = null, dc = null, stream = null, statsInterval = null;
 let viewerW = 0, viewerH = 0;
 
