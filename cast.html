@@ -130,7 +130,6 @@ async function waitForIce(conn) {
 
 async function startCast() {
   try {
-    await fetch('/reset', {method: 'POST'});
     status('Select a window to share…', 'wait');
 
     stream = await navigator.mediaDevices.getDisplayMedia({
@@ -148,80 +147,136 @@ async function startCast() {
     vtrack.onended = () => stopCast();
     vtrack.contentHint = 'motion';
 
-    pc = new RTCPeerConnection({
-      iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
-    });
-    dc = pc.createDataChannel('control');
-    dc.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
-      } catch (_) {}
-    };
-    stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
-    const txc = pc.getTransceivers()[0];
-    if (txc && txc.setCodecPreferences) {
-      const caps = RTCRtpSender.getCapabilities('video');
-      if (caps) {
-        const vp8 = caps.codecs.filter(c => c.mimeType === 'video/VP8');
-        const rest = caps.codecs.filter(c => c.mimeType !== 'video/VP8');
-        if (vp8.length) txc.setCodecPreferences([...vp8, ...rest]);
-      }
-    }
-
-    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-    if (sender) {
-      const settings = vtrack.getSettings();
-      const maxW = viewerW || 1920, maxH = viewerH || 1080;
-      const factor = Math.max(settings.width / maxW, settings.height / maxH, 1.0);
-      const params = sender.getParameters();
-      if (params.encodings && params.encodings[0]) {
-        params.encodings[0].maxBitrate = 8_000_000;
-        params.encodings[0].maxFramerate = 60;
-        if (factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
-        params.degradationPreference = 'maintain-resolution';
-        await sender.setParameters(params);
-      }
-    }
-
-    pc.onconnectionstatechange = () => {
-      const s = pc.connectionState;
-      if (s === 'connected') {
-        status('Connected — streaming to tablet', 'ok');
-        document.getElementById('stats').style.display = 'block';
-        startStats();
-      }
-      if (s === 'disconnected' || s === 'failed') status('Connection lost. Stop and reshare.', 'err');
-    };
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForIce(pc);
-
-    await fetch('/offer', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(pc.localDescription)
-    });
-
-    status('Waiting for tablet to connect…', 'wait');
-
-    while (pc && !pc.remoteDescription) {
-      const res = await fetch('/answer');
-      if (res.ok && res.status === 200) {
-        await pc.setRemoteDescription(await res.json());
-        break;
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
+    await connect();
   } catch (err) {
     if (err.name === 'NotAllowedError') status('Cancelled.', '');
     else { status('Error: ' + err.message, 'err'); console.error(err); }
   }
 }
 
+let reconnecting = false;
+
+async function connect() {
+  if (reconnecting) return;
+  if (!stream || !stream.getVideoTracks()[0]?.readyState === 'live') return;
+
+  if (pc) { pc.close(); pc = null; }
+  if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+
+  await fetch('/reset', {method: 'POST'});
+
+  const activeTrack = (cropMode && cropRect) ? getOrCreateCroppedTrack() : stream.getVideoTracks()[0];
+
+  pc = new RTCPeerConnection({
+    iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+  });
+  dc = pc.createDataChannel('control');
+  dc.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
+    } catch (_) {}
+  };
+  pc.addTrack(activeTrack, stream);
+
+  const txc = pc.getTransceivers()[0];
+  if (txc && txc.setCodecPreferences) {
+    const caps = RTCRtpSender.getCapabilities('video');
+    if (caps) {
+      const vp8 = caps.codecs.filter(c => c.mimeType === 'video/VP8');
+      const rest = caps.codecs.filter(c => c.mimeType !== 'video/VP8');
+      if (vp8.length) txc.setCodecPreferences([...vp8, ...rest]);
+    }
+  }
+
+  const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+  if (sender) {
+    const settings = activeTrack.getSettings();
+    const maxW = viewerW || 1920, maxH = viewerH || 1080;
+    const factor = Math.max(settings.width / maxW, settings.height / maxH, 1.0);
+    const params = sender.getParameters();
+    if (params.encodings && params.encodings[0]) {
+      params.encodings[0].maxBitrate = 8_000_000;
+      params.encodings[0].maxFramerate = 60;
+      if (!cropMode && factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
+      params.degradationPreference = 'maintain-resolution';
+      await sender.setParameters(params);
+    }
+  }
+
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === 'connected') {
+      status('Connected — streaming to tablet', 'ok');
+      document.getElementById('stats').style.display = 'block';
+      startStats();
+    }
+    if (s === 'disconnected' || s === 'failed') reconnect();
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await waitForIce(pc);
+
+  await fetch('/offer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(pc.localDescription)
+  });
+
+  status('Waiting for tablet to connect…', 'wait');
+
+  while (pc && !pc.remoteDescription) {
+    const res = await fetch('/answer');
+    if (res.ok && res.status === 200) {
+      await pc.setRemoteDescription(await res.json());
+      break;
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
+
+async function reconnect() {
+  if (reconnecting) return;
+  if (!stream || stream.getVideoTracks()[0]?.readyState !== 'live') {
+    status('Stream ended. Click Share Window to restart.', 'err');
+    return;
+  }
+  reconnecting = true;
+  let delay = 1000;
+  while (stream && stream.getVideoTracks()[0]?.readyState === 'live') {
+    status(`Reconnecting in ${(delay/1000).toFixed(0)}s…`, 'wait');
+    await new Promise(r => setTimeout(r, delay));
+    try {
+      await connect();
+      reconnecting = false;
+      return;
+    } catch (e) {
+      console.error('Reconnect failed:', e);
+      delay = Math.min(delay * 1.5, 10000);
+    }
+  }
+  reconnecting = false;
+  status('Stream ended during reconnect.', 'err');
+}
+
+function getOrCreateCroppedTrack() {
+  outputCanvas.width = cropRect.w;
+  outputCanvas.height = cropRect.h;
+  const cx = cropRect.x, cy = cropRect.y, cw = cropRect.w, ch = cropRect.h;
+  function renderFrame() {
+    octx.drawImage(previewVideo, cx, cy, cw, ch, 0, 0, cw, ch);
+    previewVideo.requestVideoFrameCallback(renderFrame);
+  }
+  previewVideo.requestVideoFrameCallback(renderFrame);
+  const croppedStream = outputCanvas.captureStream(60);
+  const track = croppedStream.getVideoTracks()[0];
+  track.contentHint = 'motion';
+  return track;
+}
+
 function stopCast() {
+  reconnecting = false;
   disableCrop();
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
@@ -291,21 +346,8 @@ function disableCrop() {
 
 function applyCrop() {
   if (!cropRect || !pc) return;
-  const { x, y, w, h } = cropRect;
 
-  outputCanvas.width = w;
-  outputCanvas.height = h;
-
-  function renderFrame() {
-    octx.drawImage(previewVideo, x, y, w, h, 0, 0, w, h);
-    previewVideo.requestVideoFrameCallback(renderFrame);
-  }
-  previewVideo.requestVideoFrameCallback(renderFrame);
-
-  const croppedStream = outputCanvas.captureStream(60);
-  const croppedTrack = croppedStream.getVideoTracks()[0];
-  croppedTrack.contentHint = 'motion';
-
+  const croppedTrack = getOrCreateCroppedTrack();
   const sender = pc.getSenders().find(s => s.track?.kind === 'video');
   if (sender) {
     sender.replaceTrack(croppedTrack);
@@ -316,7 +358,8 @@ function applyCrop() {
     }
   }
 
-  document.getElementById('cropInfo').textContent = `Streaming cropped ${w}×${h} region`;
+  document.getElementById('cropInfo').textContent =
+    `Streaming cropped ${cropRect.w}×${cropRect.h} region`;
 }
 
 function resetCrop() {
