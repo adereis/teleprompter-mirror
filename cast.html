@@ -83,6 +83,7 @@ let viewerW = 0, viewerH = 0;
 let cropMode = false, cropRect = null, cropAnimId = null;
 let dragging = false, dragStart = null, ratioLock = true;
 let cropScale = 1;
+let cropRenderToken = null;
 const outputCanvas = document.getElementById('outputCanvas');
 const octx = outputCanvas.getContext('2d');
 const cropCanvas = document.getElementById('cropCanvas');
@@ -273,14 +274,17 @@ async function reconnect() {
 }
 
 function getOrCreateCroppedTrack() {
+  cropRenderToken = {};
+  const token = cropRenderToken;
   outputCanvas.width = cropRect.w;
   outputCanvas.height = cropRect.h;
   const cx = cropRect.x, cy = cropRect.y, cw = cropRect.w, ch = cropRect.h;
   function renderFrame() {
+    if (token !== cropRenderToken) return;
     octx.drawImage(previewVideo, cx, cy, cw, ch, 0, 0, cw, ch);
-    previewVideo.requestVideoFrameCallback(renderFrame);
+    requestAnimationFrame(renderFrame);
   }
-  previewVideo.requestVideoFrameCallback(renderFrame);
+  requestAnimationFrame(renderFrame);
   const croppedStream = outputCanvas.captureStream(60);
   const track = croppedStream.getVideoTracks()[0];
   track.contentHint = 'motion';
@@ -339,6 +343,7 @@ function enableCrop() {
 function disableCrop() {
   if (!cropMode) return;
   cropMode = false;
+  cropRenderToken = null;
   if (cropAnimId) { cancelAnimationFrame(cropAnimId); cropAnimId = null; }
   cropCanvas.style.display = 'none';
   cropRect = null;
@@ -376,6 +381,7 @@ function applyCrop() {
 
 function resetCrop() {
   if (!previewVideo.videoWidth) return;
+  cropRenderToken = null;
   cropRect = { x: 0, y: 0, w: previewVideo.videoWidth, h: previewVideo.videoHeight };
   document.getElementById('cropInfo').textContent = 'Crop reset — draw a new rectangle or disable crop.';
 
