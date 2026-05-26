@@ -1,0 +1,17 @@
+#!/bin/bash
+# NetworkManager dispatcher script for camera WiFi reconnect.
+# Initializes the Sony A6300 when the Camera-A6300 WiFi profile comes up.
+
+IFACE="$1"
+ACTION="$2"
+
+[ "$ACTION" = "up" ] || exit 0
+
+# Only act on the camera WiFi connection
+CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
+[ "$CONN" = "Camera-A6300" ] || exit 0
+
+logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
+
+# Background: camera API may take a few seconds to become available after WiFi
+runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 | logger -t teleprompter-camera &

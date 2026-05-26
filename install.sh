@@ -18,10 +18,15 @@ sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/teleprompter-tether-prompt.service"
     > /etc/systemd/system/teleprompter-tether-prompt.service
 systemctl daemon-reload
 
-echo "Installing NetworkManager dispatcher..."
+echo "Installing NetworkManager dispatchers..."
 sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/99-teleprompter" \
     > /etc/NetworkManager/dispatcher.d/99-teleprompter
 chmod +x /etc/NetworkManager/dispatcher.d/99-teleprompter
+
+sed -e "s/__USER__/$TARGET_USER/g" -e "s|__PROJECT_DIR__|$SCRIPT_DIR|g" \
+    "$SCRIPT_DIR/99-teleprompter-camera" \
+    > /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
+chmod +x /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 
 echo "Installing desktop entry..."
 DESKTOP_DIR="$TARGET_HOME/.local/share/applications"
@@ -36,6 +41,7 @@ echo "Installed:"
 echo "  udev:    /etc/udev/rules.d/99-teleprompter-tablet.rules"
 echo "  systemd: /etc/systemd/system/teleprompter-tether-prompt.service"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter"
+echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter-camera"
 echo "  desktop: $DESKTOP_DIR/teleprompter-mirror.desktop"
 echo ""
 echo "To uninstall: sudo $SCRIPT_DIR/uninstall.sh"

@@ -15,6 +15,7 @@ rm -f /etc/systemd/system/teleprompter-tether-prompt.service
 systemctl daemon-reload
 
 rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter
+rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 
 rm -f "$TARGET_HOME/.local/share/applications/teleprompter-mirror.desktop"
 runuser -u "$TARGET_USER" -- update-desktop-database "$TARGET_HOME/.local/share/applications" 2>/dev/null || true

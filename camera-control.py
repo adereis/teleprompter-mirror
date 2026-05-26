@@ -16,6 +16,7 @@ Usage:
     camera-control.py refocus           # Nudge zoom in/out to trigger AF-C refocus
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
+    camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
 """
 
 import json
@@ -85,7 +86,7 @@ def discover():
     return model, endpoint
 
 
-def api_call(endpoint, method, params=None, version="1.0"):
+def api_call(endpoint, method, params=None, version="1.0", exit_on_error=True):
     """Make a JSON-RPC call to the camera."""
     payload = {
         "method": method,
@@ -105,12 +106,16 @@ def api_call(endpoint, method, params=None, version="1.0"):
     except urllib.error.HTTPError as e:
         result = json.loads(e.read())
     except (urllib.error.URLError, ConnectionError, OSError) as e:
+        if not exit_on_error:
+            return None
         print(f"Connection failed: {e}")
         print("Is the camera's WiFi connected and Smart Remote running?")
         sys.exit(1)
 
     if "error" in result:
         code, msg = result["error"]
+        if not exit_on_error:
+            return None
         print(f"Error {code}: {msg}")
         sys.exit(1)
 
@@ -242,6 +247,21 @@ def cmd_status(endpoint):
                         print(f"{t}: {json.dumps(sub, indent=2)}")
 
 
+def cmd_reconnect(endpoint):
+    """Wait for camera after WiFi reconnect, start rec mode, restore zoom."""
+    max_wait = 30
+    for attempt in range(max_wait // 2):
+        result = api_call(endpoint, "startRecMode", exit_on_error=False)
+        if result is not None:
+            print("Camera connected, rec mode started.")
+            time.sleep(3)
+            cmd_zoom_set(endpoint, DEFAULT_ZOOM)
+            return
+        time.sleep(2)
+    print(f"Camera not reachable after {max_wait}s")
+    sys.exit(1)
+
+
 def cmd_apis(endpoint):
     """List all available API methods."""
     result = api_call(endpoint, "getAvailableApiList")
@@ -272,6 +292,8 @@ def main():
         cmd_refocus(endpoint)
     elif cmd == "status":
         cmd_status(endpoint)
+    elif cmd == "reconnect":
+        cmd_reconnect(endpoint)
     elif cmd == "apis":
         cmd_apis(endpoint)
     else:

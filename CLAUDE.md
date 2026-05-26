@@ -40,8 +40,8 @@ mirrored, acting as a teleprompter near the camera lens.
 
 ### KVM switch automation
 
-When the tablet is on a USB KVM switch, disconnects/reconnects reset everything.
-Two system hooks automate recovery:
+When the tablet and camera WiFi adapter are on a USB KVM switch,
+disconnects/reconnects reset everything. System hooks automate recovery:
 
 - `99-teleprompter-tablet.rules` — udev rule. Detects Samsung tablet connecting
   in MTP mode (`04e8:6860`) and triggers a systemd service that opens tethering
@@ -49,6 +49,10 @@ Two system hooks automate recovery:
 - `99-teleprompter` — NetworkManager dispatcher. Fires when `usb0` comes up
   after tethering is enabled. Fixes routing (never-default), firewall (trusted
   zone), and ADB reverse port forwarding. No user action needed.
+- `99-teleprompter-camera` — NetworkManager dispatcher. Fires when the
+  `Camera-A6300` WiFi profile connects. Runs `camera-control.py reconnect`
+  in the background to initialize the camera (startRecMode + zoom restore).
+  Handles both initial connection and KVM switch recovery.
 - `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
   the udev rule. Runs `adb shell am start` as the user.
 - `install.sh` — Installs system hooks and desktop entry (run with sudo).
