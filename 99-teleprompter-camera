@@ -13,5 +13,15 @@ CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | c
 
 logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
 
-# Background: camera API may take a few seconds to become available after WiFi
-runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 | logger -t teleprompter-camera &
+# Kill any stale keepalive from a previous session
+PIDFILE="/home/__USER__/tmp/camera-keepalive.pid"
+if [ -f "$PIDFILE" ]; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE"
+fi
+
+# Background: reconnect camera API, then start keepalive to prevent WiFi timeout
+{
+    runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1
+    runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py keepalive 2>&1
+} | logger -t teleprompter-camera &

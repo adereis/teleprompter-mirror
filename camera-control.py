@@ -17,9 +17,12 @@ Usage:
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
+    camera-control.py keepalive         # Poll camera every 5 min to prevent WiFi timeout
 """
 
 import json
+import os
+import signal
 import socket
 import sys
 import time
@@ -33,6 +36,8 @@ SSDP_TIMEOUT = 3
 
 DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
 DEFAULT_ZOOM = 32
+KEEPALIVE_INTERVAL = 300
+KEEPALIVE_PIDFILE = os.path.expanduser("~/tmp/camera-keepalive.pid")
 
 
 def discover():
@@ -254,12 +259,48 @@ def cmd_reconnect(endpoint):
         result = api_call(endpoint, "startRecMode", exit_on_error=False)
         if result is not None:
             print("Camera connected, rec mode started.")
-            time.sleep(3)
-            cmd_zoom_set(endpoint, DEFAULT_ZOOM)
+            for retry in range(3):
+                time.sleep(3)
+                try:
+                    cmd_zoom_set(endpoint, DEFAULT_ZOOM)
+                    return
+                except SystemExit:
+                    if retry < 2:
+                        print(f"Zoom not ready, retrying ({retry + 2}/3)...")
+            print("Zoom restore failed after 3 attempts")
             return
         time.sleep(2)
     print(f"Camera not reachable after {max_wait}s")
     sys.exit(1)
+
+
+def cmd_keepalive(endpoint):
+    """Poll camera periodically to prevent WiFi inactivity disconnect."""
+    def cleanup(signum=None, frame=None):
+        try:
+            os.remove(KEEPALIVE_PIDFILE)
+        except FileNotFoundError:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, cleanup)
+    signal.signal(signal.SIGINT, cleanup)
+
+    os.makedirs(os.path.dirname(KEEPALIVE_PIDFILE), exist_ok=True)
+    with open(KEEPALIVE_PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    print(f"Keepalive started (PID {os.getpid()}, interval {KEEPALIVE_INTERVAL}s)")
+    try:
+        while True:
+            time.sleep(KEEPALIVE_INTERVAL)
+            result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
+            if result is not None:
+                print("keepalive: OK")
+            else:
+                print("keepalive: camera unreachable, will retry")
+    finally:
+        cleanup()
 
 
 def cmd_apis(endpoint):
@@ -294,6 +335,8 @@ def main():
         cmd_status(endpoint)
     elif cmd == "reconnect":
         cmd_reconnect(endpoint)
+    elif cmd == "keepalive":
+        cmd_keepalive(endpoint)
     elif cmd == "apis":
         cmd_apis(endpoint)
     else:
