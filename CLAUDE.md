@@ -152,6 +152,13 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
 
 ### Network isolation
 
+- **Routing priority**: Ethernet (`Ethernet` profile) is the primary internet
+  uplink; WiFi (`optimusnet`) is the automatic fallback. Both must keep
+  `ipv4.never-default no` (the default). Tablet USB (`Wired connection N`) and
+  camera WiFi (`Camera-A6300`) are local-only — both use `never-default yes`
+  and must never carry a default route. NM auto-assigns metrics (~100 for
+  ethernet, ~600 for WiFi) and adds +20,000 to WiFi when a wired default
+  exists, so no explicit metrics are needed.
 - **Servers bind to localhost only** (`127.0.0.1`). The tablet reaches them via
   ADB reverse port forwarding. Never bind to `0.0.0.0` or a LAN address.
 - **USB tethering interfaces go in the `trusted` firewall zone** at runtime only
