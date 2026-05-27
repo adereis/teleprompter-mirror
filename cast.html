@@ -93,7 +93,16 @@ const cctx = cropCanvas.getContext('2d');
 const previewVideo = document.getElementById('preview');
 
 function gcd(a, b) { return b ? gcd(b, a % b) : a; }
-function ratioStr(w, h) { const g = gcd(w, h); return `${w/g}:${h/g}`; }
+function ratioStr(w, h) {
+  const t = w / h;
+  let bn = w, bd = h, be = 1;
+  for (let d = 1; d <= 20; d++) {
+    const n = Math.round(t * d), e = Math.abs(n / d - t);
+    if (e < be) { be = e; bn = n; bd = d; if (e < 0.005) break; }
+  }
+  const g = gcd(bn, bd);
+  return `${bn/g}:${bd/g}`;
+}
 
 function onViewport(w, h, fullscreen) {
   viewerW = w; viewerH = h;

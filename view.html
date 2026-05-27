@@ -51,9 +51,11 @@ async function waitForIce(conn) {
 
 function sendViewport(ch) {
   if (ch.readyState !== 'open') return;
+  const fs = !!document.fullscreenElement ||
+    (Math.abs(window.innerWidth - screen.width) <= 10 &&
+     Math.abs(window.innerHeight - screen.height) <= 10);
   ch.send(JSON.stringify({viewport: {
-    w: window.innerWidth, h: window.innerHeight,
-    fullscreen: !!document.fullscreenElement
+    w: window.innerWidth, h: window.innerHeight, fullscreen: fs
   }}));
 }
 
