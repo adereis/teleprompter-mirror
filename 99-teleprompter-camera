@@ -1,27 +1,46 @@
 #!/bin/bash
 # NetworkManager dispatcher script for camera WiFi reconnect.
-# Initializes the Sony A6300 when the Camera-A6300 WiFi profile comes up.
+# Initializes the Sony A6300 when the Camera-A6300 WiFi profile comes up,
+# and ensures the keepalive process stays running across DHCP renewals.
 
 IFACE="$1"
 ACTION="$2"
 
-[ "$ACTION" = "up" ] || exit 0
+[ "$ACTION" = "up" ] || [ "$ACTION" = "dhcp4-change" ] || exit 0
 
 # Only act on the camera WiFi connection
 CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
 [ "$CONN" = "Camera-A6300" ] || exit 0
 
-logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
-
-# Kill any stale keepalive from a previous session
 PIDFILE="/home/__USER__/tmp/camera-keepalive.pid"
-if [ -f "$PIDFILE" ]; then
-    kill "$(cat "$PIDFILE")" 2>/dev/null
-    rm -f "$PIDFILE"
-fi
 
-# Background: reconnect camera API, then start keepalive to prevent WiFi timeout
-{
-    runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1
+start_keepalive() {
     runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py keepalive 2>&1
-} | logger -t teleprompter-camera &
+}
+
+if [ "$ACTION" = "up" ]; then
+    logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
+
+    # Kill any keepalive from a previous session (or a concurrent dhcp4-change)
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    pkill -f 'camera-control\.py keepalive' 2>/dev/null
+
+    # Background: reconnect camera API, then start keepalive
+    {
+        runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1
+        start_keepalive
+    } | logger -t teleprompter-camera &
+
+elif [ "$ACTION" = "dhcp4-change" ]; then
+    # Check if keepalive is still alive; restart if dead
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        exit 0
+    fi
+
+    logger -t teleprompter-camera "Keepalive dead on $IFACE — restarting"
+    rm -f "$PIDFILE"
+    start_keepalive 2>&1 | logger -t teleprompter-camera &
+fi

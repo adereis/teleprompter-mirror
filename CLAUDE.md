@@ -49,10 +49,11 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - `99-teleprompter` — NetworkManager dispatcher. Fires when `usb0` comes up
   after tethering is enabled. Fixes routing (never-default), firewall (trusted
   zone), and ADB reverse port forwarding. No user action needed.
-- `99-teleprompter-camera` — NetworkManager dispatcher. Fires when the
-  `Camera-A6300` WiFi profile connects. Runs `camera-control.py reconnect`
-  in the background to initialize the camera (startRecMode + zoom restore).
-  Handles both initial connection and KVM switch recovery.
+- `99-teleprompter-camera` — NetworkManager dispatcher. Fires on `up` (initial
+  connection) and `dhcp4-change` (lease renewal). On `up`, runs full reconnect
+  (startRecMode + zoom restore) then starts keepalive. On `dhcp4-change`, checks
+  if the keepalive process is still alive and restarts it if dead. This covers
+  KVM switch recovery where the WiFi re-associates without a full NM `up` cycle.
 - `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
   the udev rule. Runs `adb shell am start` as the user.
 - `install.sh` — Installs system hooks and desktop entry (run with sudo).
