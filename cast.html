@@ -95,19 +95,21 @@ const previewVideo = document.getElementById('preview');
 function gcd(a, b) { return b ? gcd(b, a % b) : a; }
 function ratioStr(w, h) { const g = gcd(w, h); return `${w/g}:${h/g}`; }
 
-function onViewport(w, h) {
+function onViewport(w, h, fullscreen) {
   viewerW = w; viewerH = h;
   const ratio = w / h;
   const wrap = document.getElementById('previewWrap');
   wrap.style.aspectRatio = `${w}/${h}`;
-  wrap.dataset.label = `viewer ${w}×${h} (${ratioStr(w, h)})`;
+  const fsLabel = fullscreen ? 'fullscreen' : 'windowed';
+  wrap.dataset.label = `viewer ${w}×${h} (${ratioStr(w, h)}, ${fsLabel})`;
 
   const sub = document.querySelector('.sub');
   const r = ratioStr(w, h);
   const ex1 = `${Math.round(600 * ratio)}×600`;
   const ex2 = `${Math.round(900 * ratio)}×900`;
+  const fsHint = fullscreen ? '' : '<br><em style="color:#f0a500">Viewer is not fullscreen — aspect ratio reflects browser chrome</em>';
   sub.innerHTML = `Select a window to share — the tablet viewer will mirror it.<br>` +
-    `Optimal window ratio for the viewer: <strong>${r}</strong> (e.g. ${ex1}, ${ex2})`;
+    `Optimal window ratio for the viewer: <strong>${r}</strong> (e.g. ${ex1}, ${ex2})` + fsHint;
 
   if (pc && stream && !cropMode) updateScaling();
 }
@@ -189,7 +191,7 @@ async function connect() {
   dc.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
+      if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h, msg.viewport.fullscreen);
     } catch (_) {}
   };
   pc.addTrack(activeTrack, stream);

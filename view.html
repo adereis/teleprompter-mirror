@@ -49,6 +49,14 @@ async function waitForIce(conn) {
   });
 }
 
+function sendViewport(ch) {
+  if (ch.readyState !== 'open') return;
+  ch.send(JSON.stringify({viewport: {
+    w: window.innerWidth, h: window.innerHeight,
+    fullscreen: !!document.fullscreenElement
+  }}));
+}
+
 async function connect() {
   let offer = null;
   while (!offer) {
@@ -76,9 +84,10 @@ async function connect() {
 
 
   pc.ondatachannel = (e) => {
-    e.channel.onopen = () => {
-      e.channel.send(JSON.stringify({viewport: {w: screen.width, h: screen.height}}));
-    };
+    const ch = e.channel;
+    ch.onopen = () => sendViewport(ch);
+    window.addEventListener('resize', () => sendViewport(ch));
+    document.addEventListener('fullscreenchange', () => sendViewport(ch));
   };
 
   pc.onconnectionstatechange = () => {
@@ -123,8 +132,12 @@ keepAwake();
 // Jitter buffer depth monitor (sliding window over last 2s)
 let prevJB = null;
 setInterval(async () => {
-  if (!pc) return;
   const el = document.getElementById('jitter');
+  if (!pc || pc.connectionState !== 'connected') {
+    el.style.display = 'none';
+    prevJB = null;
+    return;
+  }
   const report = await pc.getStats();
   report.forEach(s => {
     if (s.type !== 'inbound-rtp' || s.kind !== 'video') return;
