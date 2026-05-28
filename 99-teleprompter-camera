@@ -35,12 +35,22 @@ if [ "$ACTION" = "up" ]; then
     } | logger -t teleprompter-camera &
 
 elif [ "$ACTION" = "dhcp4-change" ]; then
-    # Check if keepalive is still alive; restart if dead
-    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-        exit 0
+    # Restart keepalive if dead
+    if ! { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }; then
+        logger -t teleprompter-camera "Keepalive dead on $IFACE — restarting"
+        rm -f "$PIDFILE"
+        start_keepalive 2>&1 | logger -t teleprompter-camera &
     fi
 
-    logger -t teleprompter-camera "Keepalive dead on $IFACE — restarting"
-    rm -f "$PIDFILE"
-    start_keepalive 2>&1 | logger -t teleprompter-camera &
+    # Check if camera reset (WiFi re-association resets Smart Remote)
+    STATUS=$(runuser -u __USER__ -- curl -s --connect-timeout 3 -X POST \
+        -d '{"method":"getEvent","params":[false],"id":1,"version":"1.0"}' \
+        http://192.168.122.1:8080/sony/camera 2>/dev/null \
+        | runuser -u __USER__ -- python3 -c \
+        "import sys,json; print(json.load(sys.stdin)['result'][1]['cameraStatus'])" 2>/dev/null)
+    if [ "$STATUS" = "NotReady" ]; then
+        logger -t teleprompter-camera "Camera reset on $IFACE — running reconnect"
+        runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 \
+            | logger -t teleprompter-camera &
+    fi
 fi

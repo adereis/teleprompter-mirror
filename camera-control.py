@@ -295,10 +295,20 @@ def cmd_keepalive(endpoint):
         while True:
             time.sleep(KEEPALIVE_INTERVAL)
             result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
-            if result is not None:
-                print("keepalive: OK")
-            else:
+            if result is None:
                 print("keepalive: camera unreachable, will retry")
+                continue
+            status = result[1].get("cameraStatus") if isinstance(result[1], dict) else None
+            if status == "NotReady":
+                print("keepalive: camera reset to NotReady, re-initializing")
+                if api_call(endpoint, "startRecMode", exit_on_error=False) is not None:
+                    time.sleep(3)
+                    try:
+                        cmd_zoom_set(endpoint, DEFAULT_ZOOM)
+                    except SystemExit:
+                        print("keepalive: zoom restore failed")
+            else:
+                print("keepalive: OK")
     finally:
         cleanup()
 
