@@ -35,7 +35,7 @@ SSDP_ST = "urn:schemas-sony-com:service:ScalarWebAPI:1"
 SSDP_TIMEOUT = 3
 
 DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
-DEFAULT_ZOOM = 32
+DEFAULT_ZOOM = 40
 KEEPALIVE_INTERVAL = 300
 KEEPALIVE_PIDFILE = os.path.expanduser("~/tmp/camera-keepalive.pid")
 
