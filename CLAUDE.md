@@ -56,8 +56,22 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   (startRecMode + zoom restore) then starts keepalive. On `dhcp4-change`, checks
   if the keepalive process is still alive and restarts it if dead. This covers
   KVM switch recovery where the WiFi re-associates without a full NM `up` cycle.
+- `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
+  (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
+  switches or port changes, the `mt7601u` driver sometimes fails to claim the
+  USB interface despite successful enumeration (no `wlan0` created). The service
+  waits for normal probe, then forces a USB re-probe if needed.
 - `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
-  the udev rule. Runs `adb shell am start` as the user.
+  the tablet udev rule. Runs `adb shell am start` as the user.
+- `teleprompter-wifi-rebind.service` — systemd one-shot service triggered by
+  the WiFi adapter udev rule. Runs `wifi-rebind.sh` as root (needs sysfs
+  write access to toggle USB device authorization).
+- `wifi-rebind.sh` — Recovery script for the MT7601U. Waits 5 seconds for
+  the driver to probe normally, then checks for `wlan0`. If missing, finds the
+  device in sysfs and toggles its `authorized` attribute to force re-enumeration
+  and driver re-probe. Retries up to 3 times. Logs to `teleprompter-wifi`
+  syslog tag. If the device dropped from sysfs entirely (EPROTO), logs a
+  warning — physical replug is needed.
 - `install.sh` — Installs system hooks and desktop entry (run with sudo).
   Substitutes `__USER__` and `__PROJECT_DIR__` placeholders with runtime
   values so the source files contain no hardcoded paths or usernames.

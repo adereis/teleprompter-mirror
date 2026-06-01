@@ -21,6 +21,7 @@ Usage:
 """
 
 import json
+import logging
 import os
 import signal
 import socket
@@ -38,6 +39,18 @@ DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
 DEFAULT_ZOOM = 40
 KEEPALIVE_INTERVAL = 300
 KEEPALIVE_PIDFILE = os.path.expanduser("~/tmp/camera-keepalive.pid")
+
+log = logging.getLogger("camera-control")
+
+
+def _init_logging():
+    logging.basicConfig(
+        format="%(asctime)s %(message)s",
+        datefmt="%H:%M:%S",
+        level=logging.INFO,
+        stream=sys.stdout,
+    )
+    sys.stdout.reconfigure(line_buffering=True)
 
 
 def discover():
@@ -105,25 +118,31 @@ def api_call(endpoint, method, params=None, version="1.0", exit_on_error=True):
         data=data,
         headers={"Content-Type": "application/json"},
     )
+    t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         result = json.loads(e.read())
     except (urllib.error.URLError, ConnectionError, OSError) as e:
+        elapsed = (time.monotonic() - t0) * 1000
+        log.info("api %s -> ERR %.0fms %s", method, elapsed, e)
         if not exit_on_error:
             return None
         print(f"Connection failed: {e}")
         print("Is the camera's WiFi connected and Smart Remote running?")
         sys.exit(1)
 
+    elapsed = (time.monotonic() - t0) * 1000
     if "error" in result:
         code, msg = result["error"]
+        log.info("api %s -> ERR %.0fms [%s] %s", method, elapsed, code, msg)
         if not exit_on_error:
             return None
         print(f"Error {code}: {msg}")
         sys.exit(1)
 
+    log.info("api %s -> OK %.0fms", method, elapsed)
     return result.get("result", [])
 
 
@@ -326,6 +345,7 @@ def main():
         print(__doc__)
         sys.exit(0)
 
+    _init_logging()
     cmd = sys.argv[1]
     endpoint = DEFAULT_ENDPOINT
 
