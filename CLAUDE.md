@@ -128,6 +128,12 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   A dedicated USB WiFi adapter (MT7601U, `wlan0`) connects to the camera via the
   `Camera-A6300` NM profile, so the main WiFi (`wlp9s0`) stays on the home/office
   network. The profile auto-connects when the camera's AP is visible.
+- The laptop's built-in webcam (Integrated RGB Camera) has higher PipeWire
+  priority than the HDMI capture dongle by default, making it the default
+  camera in Google Meet and other apps. A WirePlumber rule in
+  `~/.config/wireplumber/wireplumber.conf.d/prefer-hdmi-capture.conf` boosts
+  the HDMI capture's `priority.session` above the built-in camera so the
+  external camera is preferred. Both cameras remain available in app dropdowns.
 - The `99-teleprompter` NM dispatcher must only match tablet USB tethering
   connections, not all USB ethernet. It matches by NM connection name
   (`Wired connection *`), not by interface name pattern. The old `enp*u*` pattern
