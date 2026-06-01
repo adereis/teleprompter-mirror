@@ -51,11 +51,8 @@ async function waitForIce(conn) {
 
 function sendViewport(ch) {
   if (ch.readyState !== 'open') return;
-  const fs = !!document.fullscreenElement ||
-    (Math.abs(window.innerWidth - screen.width) <= 10 &&
-     Math.abs(window.innerHeight - screen.height) <= 10);
   ch.send(JSON.stringify({viewport: {
-    w: window.innerWidth, h: window.innerHeight, fullscreen: fs
+    w: window.innerWidth, h: window.innerHeight
   }}));
 }
 
@@ -89,7 +86,6 @@ async function connect() {
     const ch = e.channel;
     ch.onopen = () => sendViewport(ch);
     window.addEventListener('resize', () => sendViewport(ch));
-    document.addEventListener('fullscreenchange', () => sendViewport(ch));
   };
 
   pc.onconnectionstatechange = () => {

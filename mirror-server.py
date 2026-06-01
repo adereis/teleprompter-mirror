@@ -57,9 +57,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         routes = {
             "/": ("redirect", "/cast"),
-            "/cast": ("html", "cast.html"),
-            "/latency": ("html", "latency-test.html"),
-            "/view": ("html", "view.html"),
+            "/cast": ("file", "cast.html", "text/html"),
+            "/latency": ("file", "latency-test.html", "text/html"),
+            "/view": ("file", "view.html", "text/html"),
+            "/icon.svg": ("file", "icon.svg", "image/svg+xml"),
+            "/manifest.json": ("file", "manifest.json", "application/manifest+json"),
             "/offer": ("signal", "_offer"),
             "/answer": ("signal", "_answer"),
         }
@@ -67,20 +69,20 @@ class Handler(BaseHTTPRequestHandler):
         if not route:
             return self._respond(404)
 
-        kind, value = route
+        kind = route[0]
         if kind == "redirect":
             self.send_response(302)
-            self.send_header("Location", value)
+            self.send_header("Location", route[1])
             self.end_headers()
-        elif kind == "html":
-            path = STATIC_DIR / value
+        elif kind == "file":
+            path = STATIC_DIR / route[1]
             if path.exists():
-                self._respond(200, "text/html", path.read_bytes())
+                self._respond(200, route[2], path.read_bytes())
             else:
                 self._respond(404)
         elif kind == "signal":
             with Handler._lock:
-                data = getattr(Handler, value)
+                data = getattr(Handler, route[1])
             if data:
                 self._respond(200, "application/json", data.encode())
             else:

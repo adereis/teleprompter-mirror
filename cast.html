@@ -2,67 +2,95 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Cast — Teleprompter Mirror</title>
+<title>Teleprompter Mirror</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="manifest" href="/manifest.json">
 <style>
-  body { font-family: system-ui, sans-serif; margin: 2em; background: #1a1a2e; color: #e0e0e0; }
-  h1 { color: #fff; margin-bottom: 0.3em; }
-  p.sub { color: #888; margin-top: 0; }
-  button {
-    padding: 10px 20px; font-size: 15px; cursor: pointer;
-    background: #0f3460; color: #fff; border: none; border-radius: 6px;
-    margin-right: 8px;
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: #1a1a2e; color: #e0e0e0;
+    height: 100vh;
+    display: grid; grid-template-columns: 1fr 280px;
+    overflow: hidden;
   }
-  button:hover { background: #1a4a8a; }
-  button:disabled { opacity: 0.4; cursor: default; }
-  .crop-btn { background: #2d4a22; }
-  .crop-btn:hover { background: #3d6a32; }
-  .crop-btn.active { background: #4ecca3; color: #1a1a2e; }
+  #previewArea {
+    background: #000;
+    position: relative;
+    min-width: 0; min-height: 0;
+  }
   #previewWrap {
-    position: relative; margin-top: 1em; max-width: 640px; width: 100%;
-    aspect-ratio: 16/9; background: #000; border: 2px dashed #4ecca3;
-    border-radius: 4px; display: none; box-sizing: border-box;
+    position: absolute; inset: 0;
+    display: none;
   }
   #previewWrap::after {
-    content: attr(data-label); position: absolute; top: 4px; left: 8px;
-    color: #4ecca3; font-size: 11px; font-family: system-ui; opacity: 0.7;
+    content: attr(data-label);
+    position: absolute; top: 6px; left: 10px;
+    color: #4ecca3; font-size: 11px; font-family: system-ui;
+    opacity: 0.6; pointer-events: none; z-index: 1;
   }
   #preview { width: 100%; height: 100%; object-fit: contain; }
   #cropCanvas {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     cursor: crosshair; display: none;
   }
+  #aspectGuide {
+    position: absolute;
+    border: 2px dashed rgba(78,204,163,0.6);
+    pointer-events: none; display: none; z-index: 1;
+  }
   #outputCanvas { position: fixed; top: -9999px; left: -9999px; }
-  #status { margin-top: 1em; font-size: 14px; }
+  #sidebar {
+    padding: 1.2em;
+    display: flex; flex-direction: column; gap: 0.8em;
+    border-left: 1px solid rgba(78,204,163,0.15);
+    overflow-y: auto;
+  }
+  .sub { color: #888; font-size: 13px; line-height: 1.5; }
+  .sub strong { color: #4ecca3; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    padding: 8px 16px; font-size: 14px; cursor: pointer;
+    background: #0f3460; color: #fff; border: none; border-radius: 6px;
+  }
+  button:hover { background: #1a4a8a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .crop-btn { background: #2d4a22; }
+  .crop-btn:hover { background: #3d6a32; }
+  .crop-btn.active { background: #4ecca3; color: #1a1a2e; }
+  #cropInfo { font-size: 13px; color: #4ecca3; display: none; }
+  #status { font-size: 14px; }
   .ok { color: #4ecca3; }
   .wait { color: #f0a500; }
   .err { color: #e74c3c; }
   #stats {
-    margin-top: 1em; font-family: monospace; font-size: 13px;
+    font-family: monospace; font-size: 12px;
     color: #888; line-height: 1.6; display: none;
   }
   #stats span { color: #4ecca3; }
-  #cropInfo {
-    margin-top: 0.5em; font-size: 13px; color: #4ecca3; display: none;
-  }
 </style>
 </head>
 <body>
-  <h1>Cast</h1>
-  <p class="sub">Select a window to share — the tablet viewer will mirror it.</p>
-  <div>
-    <button id="startBtn" onclick="startCast()">Share Window</button>
-    <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
-    <button id="cropBtn" class="crop-btn" onclick="toggleCrop()" style="display:none">Crop</button>
-    <button id="resetCropBtn" onclick="resetCrop()" style="display:none">Reset Crop</button>
-  </div>
-  <div id="previewWrap">
-    <video id="preview" autoplay muted playsinline></video>
-    <canvas id="cropCanvas"></canvas>
+  <div id="previewArea">
+    <div id="previewWrap">
+      <video id="preview" autoplay muted playsinline></video>
+      <div id="aspectGuide"></div>
+      <canvas id="cropCanvas"></canvas>
+    </div>
   </div>
   <canvas id="outputCanvas"></canvas>
-  <div id="cropInfo"></div>
-  <div id="status"></div>
-  <div id="stats"></div>
+  <div id="sidebar">
+    <p class="sub">Share a window — the tablet will mirror it for eye contact.</p>
+    <div class="controls">
+      <button id="startBtn" onclick="startCast()">Share Window</button>
+      <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
+      <button id="cropBtn" class="crop-btn" onclick="toggleCrop()" style="display:none">Crop</button>
+      <button id="resetCropBtn" onclick="resetCrop()" style="display:none">Reset Crop</button>
+    </div>
+    <div id="cropInfo"></div>
+    <div id="status"></div>
+    <div id="stats"></div>
+  </div>
 <script>
 // Singleton: close duplicate windows via BroadcastChannel
 const singletonBC = new BroadcastChannel('teleprompter-singleton');
@@ -104,23 +132,51 @@ function ratioStr(w, h) {
   return `${bn/g}:${bd/g}`;
 }
 
-function onViewport(w, h, fullscreen) {
+function onViewport(w, h) {
   viewerW = w; viewerH = h;
-  const ratio = w / h;
   const wrap = document.getElementById('previewWrap');
-  wrap.style.aspectRatio = `${w}/${h}`;
-  const fsLabel = fullscreen ? 'fullscreen' : 'windowed';
-  wrap.dataset.label = `viewer ${w}×${h} (${ratioStr(w, h)}, ${fsLabel})`;
+  wrap.dataset.label = `viewer ${w}×${h} (${ratioStr(w, h)})`;
 
   const sub = document.querySelector('.sub');
   const r = ratioStr(w, h);
-  const ex1 = `${Math.round(600 * ratio)}×600`;
-  const ex2 = `${Math.round(900 * ratio)}×900`;
-  const fsHint = fullscreen ? '' : '<br><em style="color:#f0a500">Viewer is not fullscreen — aspect ratio reflects browser chrome</em>';
-  sub.innerHTML = `Select a window to share — the tablet viewer will mirror it.<br>` +
-    `Optimal window ratio for the viewer: <strong>${r}</strong> (e.g. ${ex1}, ${ex2})` + fsHint;
+  const ratio = w / h;
+  const ex1 = `${2 * Math.round(300 * ratio)}×600`;
+  const ex2 = `${2 * Math.round(450 * ratio)}×900`;
+  sub.innerHTML = `Viewer: <strong>${r}</strong> (${w}×${h})<br>` +
+    `Optimal source: ${ex1} or ${ex2}`;
 
   if (pc && stream && !cropMode) updateScaling();
+  updateAspectGuide();
+}
+
+function updateAspectGuide() {
+  const guide = document.getElementById('aspectGuide');
+  if (cropMode || !viewerW || !viewerH || !previewVideo.videoWidth) {
+    guide.style.display = 'none';
+    return;
+  }
+  const wrap = document.getElementById('previewWrap');
+  if (wrap.style.display === 'none') { guide.style.display = 'none'; return; }
+
+  const wrapW = wrap.clientWidth, wrapH = wrap.clientHeight;
+  const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+  const vr = viewerW / viewerH, sr = vw / vh;
+
+  if (Math.abs(sr - vr) / vr < 0.02) { guide.style.display = 'none'; return; }
+
+  const scale = Math.min(wrapW / vw, wrapH / vh);
+  const displayW = vw * scale, displayH = vh * scale;
+  const offsetX = (wrapW - displayW) / 2, offsetY = (wrapH - displayH) / 2;
+
+  let gw, gh;
+  if (sr > vr) { gh = displayH; gw = Math.round(gh * vr); }
+  else { gw = displayW; gh = Math.round(gw / vr); }
+
+  guide.style.display = 'block';
+  guide.style.left = Math.round(offsetX + (displayW - gw) / 2) + 'px';
+  guide.style.top = Math.round(offsetY + (displayH - gh) / 2) + 'px';
+  guide.style.width = gw + 'px';
+  guide.style.height = gh + 'px';
 }
 
 function updateScaling() {
@@ -156,13 +212,20 @@ async function waitForIce(conn) {
 
 async function startCast() {
   try {
-    status('Select a window to share…', 'wait');
+    status('Opening window picker…', 'wait');
+
+    let selecting = true;
+    const onFocus = () => { if (selecting) status('Starting capture…', 'wait'); };
+    window.addEventListener('focus', onFocus);
 
     stream = await navigator.mediaDevices.getDisplayMedia({
       video: {cursor: 'always', frameRate: {ideal: 30, max: 30}},
       audio: false
     });
 
+    selecting = false;
+    window.removeEventListener('focus', onFocus);
+    status('Connecting…', 'wait');
     previewVideo.srcObject = stream;
     document.getElementById('previewWrap').style.display = 'block';
     document.getElementById('startBtn').disabled = true;
@@ -184,7 +247,7 @@ let reconnecting = false;
 
 async function connect() {
   if (reconnecting) return;
-  if (!stream || !stream.getVideoTracks()[0]?.readyState === 'live') return;
+  if (!stream || stream.getVideoTracks()[0]?.readyState !== 'live') return;
 
   if (pc) { pc.close(); pc = null; }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
@@ -200,7 +263,7 @@ async function connect() {
   dc.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h, msg.viewport.fullscreen);
+      if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
     } catch (_) {}
   };
   pc.addTrack(activeTrack, stream);
@@ -233,6 +296,7 @@ async function connect() {
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     if (s === 'connected') {
+      document.title = 'Streaming — Teleprompter Mirror';
       status('Connected — streaming to tablet', 'ok');
       document.getElementById('stats').style.display = 'block';
       startStats();
@@ -244,12 +308,15 @@ async function connect() {
   await pc.setLocalDescription(offer);
   await waitForIce(pc);
 
+  if (!pc) return;
+
   await fetch('/offer', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(pc.localDescription)
   });
 
+  if (!pc) return;
   status('Waiting for tablet to connect…', 'wait');
 
   while (pc && !pc.remoteDescription) {
@@ -269,6 +336,7 @@ async function reconnect() {
     return;
   }
   reconnecting = true;
+  document.title = 'Reconnecting… — Teleprompter Mirror';
   let delay = 1000;
   while (stream && stream.getVideoTracks()[0]?.readyState === 'live') {
     status(`Reconnecting in ${(delay/1000).toFixed(0)}s…`, 'wait');
@@ -319,6 +387,7 @@ function stopCast() {
   document.getElementById('resetCropBtn').style.display = 'none';
   document.getElementById('stats').style.display = 'none';
   document.getElementById('cropInfo').style.display = 'none';
+  document.title = 'Teleprompter Mirror';
   status('Stopped.', '');
   fetch('/reset', {method: 'POST'});
 }
@@ -350,6 +419,7 @@ function enableCrop() {
   document.getElementById('cropInfo').style.display = 'block';
   document.getElementById('cropInfo').textContent = 'Draw a rectangle on the preview to crop.';
 
+  updateAspectGuide();
   renderCropOverlay();
 }
 
@@ -370,12 +440,12 @@ function disableCrop() {
   document.getElementById('resetCropBtn').style.display = 'none';
   document.getElementById('cropInfo').style.display = 'none';
 
-  // Switch back to direct stream
   const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
   if (sender && stream) {
     sender.replaceTrack(stream.getVideoTracks()[0]);
     updateScaling();
   }
+  updateAspectGuide();
 }
 
 function applyCrop() {
@@ -406,7 +476,6 @@ function resetCrop() {
   cropRect = { x: 0, y: 0, w: previewVideo.videoWidth, h: previewVideo.videoHeight };
   document.getElementById('cropInfo').textContent = 'Crop reset — draw a new rectangle or disable crop.';
 
-  // Revert to direct stream
   const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
   if (sender && stream) {
     sender.replaceTrack(stream.getVideoTracks()[0]);
@@ -416,7 +485,6 @@ function resetCrop() {
 
 // ─── Crop overlay rendering ──────────────────────────────
 
-// Video display rect within the canvas, accounting for object-fit:contain letterboxing
 function videoDisplayRect() {
   const displayW = previewVideo.videoWidth * cropScale;
   const displayH = previewVideo.videoHeight * cropScale;
@@ -439,7 +507,6 @@ function renderCropOverlay() {
   cctx.clearRect(0, 0, cw, ch);
 
   if (isFullFrame()) {
-    // Full frame — show viewer aspect ratio guide
     if (viewerW && viewerH) {
       const vd = videoDisplayRect();
       const vr = viewerW / viewerH;
@@ -462,21 +529,18 @@ function renderCropOverlay() {
   const cx = cropRect.x * cropScale + vd.x, cy = cropRect.y * cropScale + vd.y;
   const rw = cropRect.w * cropScale, rh = cropRect.h * cropScale;
 
-  // Dim outside crop
   cctx.fillStyle = 'rgba(0,0,0,0.45)';
   cctx.fillRect(0, 0, cw, cy);
   cctx.fillRect(0, cy + rh, cw, ch - cy - rh);
   cctx.fillRect(0, cy, cx, rh);
   cctx.fillRect(cx + rw, cy, cw - cx - rw, rh);
 
-  // Crop border
   cctx.strokeStyle = '#4ecca3';
   cctx.lineWidth = 2;
   cctx.setLineDash([6, 3]);
   cctx.strokeRect(cx, cy, rw, rh);
   cctx.setLineDash([]);
 
-  // Resize handles
   const hs = 5;
   cctx.fillStyle = '#4ecca3';
   for (const [hx, hy] of [
@@ -485,7 +549,6 @@ function renderCropOverlay() {
     [cx, cy + rh], [cx + rw/2, cy + rh], [cx + rw, cy + rh]
   ]) cctx.fillRect(hx - hs, hy - hs, hs * 2, hs * 2);
 
-  // Label
   const cr = (cropRect.w / cropRect.h).toFixed(2);
   cctx.fillStyle = '#4ecca3';
   cctx.font = '12px system-ui';
@@ -511,12 +574,10 @@ function hitTestCrop(canvasX, canvasY) {
   const cx = cropRect.x * cropScale + vd.x, cy = cropRect.y * cropScale + vd.y;
   const rw = cropRect.w * cropScale, rh = cropRect.h * cropScale;
   const hs = HANDLE_SIZE;
-  // Corners
   if (Math.abs(canvasX - cx) < hs && Math.abs(canvasY - cy) < hs) return 'resize-nw';
   if (Math.abs(canvasX - (cx + rw)) < hs && Math.abs(canvasY - cy) < hs) return 'resize-ne';
   if (Math.abs(canvasX - cx) < hs && Math.abs(canvasY - (cy + rh)) < hs) return 'resize-sw';
   if (Math.abs(canvasX - (cx + rw)) < hs && Math.abs(canvasY - (cy + rh)) < hs) return 'resize-se';
-  // Edges
   if (canvasX > cx + hs && canvasX < cx + rw - hs) {
     if (Math.abs(canvasY - cy) < hs) return 'resize-n';
     if (Math.abs(canvasY - (cy + rh)) < hs) return 'resize-s';
@@ -525,7 +586,6 @@ function hitTestCrop(canvasX, canvasY) {
     if (Math.abs(canvasX - cx) < hs) return 'resize-w';
     if (Math.abs(canvasX - (cx + rw)) < hs) return 'resize-e';
   }
-  // Interior
   if (canvasX > cx + hs && canvasX < cx + rw - hs &&
       canvasY > cy + hs && canvasY < cy + rh - hs) return 'move';
   return 'none';
@@ -559,7 +619,6 @@ function resizeCrop(dir, pos) {
   const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
   const a = resizeAnchor;
   if (dir.length === 2) {
-    // Corner — both axes move, ratio lock applies
     let w = Math.abs(pos.x - a.x), h = Math.abs(pos.y - a.y);
     if (ratioLock && viewerW && viewerH && w > MIN_CROP)
       h = Math.round(w / (viewerW / viewerH));
@@ -569,7 +628,6 @@ function resizeCrop(dir, pos) {
     w = Math.min(w, vw - x); h = Math.min(h, vh - y);
     cropRect = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
   } else {
-    // Edge — single axis, no ratio lock
     switch (dir) {
       case 'n': { const t = Math.max(0, Math.min(pos.y, a.y - MIN_CROP));
         cropRect.y = Math.round(t); cropRect.h = Math.round(a.y - t); break; }
@@ -642,6 +700,20 @@ cropCanvas.addEventListener('mouseup', e => {
   applyCrop();
 });
 
+// Keep overlays aligned when window or source video resizes
+window.addEventListener('resize', () => {
+  if (cropMode) {
+    const wrap = document.getElementById('previewWrap');
+    const wrapW = wrap.clientWidth, wrapH = wrap.clientHeight;
+    cropCanvas.width = wrapW;
+    cropCanvas.height = wrapH;
+    const vw = previewVideo.videoWidth, vh = previewVideo.videoHeight;
+    if (vw && vh) cropScale = Math.min(wrapW / vw, wrapH / vh);
+  }
+  updateAspectGuide();
+});
+previewVideo.addEventListener('resize', updateAspectGuide);
+
 // ─── Stats ───────────────────────────────────────────────
 
 let prevStats = {};
@@ -663,14 +735,14 @@ function startStats() {
         const kbps = dt > 0 ? Math.round(((s.bytesSent - prevBytes) * 8 / 1000) / dt) : 0;
         const ql = s.qualityLimitationReason || 'none';
         const cropLabel = cropMode && cropRect ? ' (cropped)' : '';
-        out.encode = `Encode: <span>${encMs}ms/frame</span>  ${w}x${h}${cropLabel} @ <span>${fps}fps</span>`;
-        out.bitrate = `Bitrate: <span>${kbps} kbps</span>  Quality limit: <span>${ql}</span>`;
+        out.encode = `Encode: <span>${encMs}ms/f</span> ${w}x${h}${cropLabel} @ <span>${fps}fps</span>`;
+        out.bitrate = `Bitrate: <span>${kbps} kbps</span> QL: <span>${ql}</span>`;
         prevStats = {bytesSent: s.bytesSent, timestamp: s.timestamp};
       }
       if (s.type === 'remote-inbound-rtp' && s.kind === 'video') {
         const rtt = s.roundTripTime != null ? (s.roundTripTime * 1000).toFixed(0) : '?';
         const jitter = s.jitter != null ? (s.jitter * 1000).toFixed(1) : '?';
-        out.net = `RTT: <span>${rtt}ms</span>  Jitter: <span>${jitter}ms</span>`;
+        out.net = `RTT: <span>${rtt}ms</span> Jitter: <span>${jitter}ms</span>`;
       }
     });
     el.innerHTML = [out.encode, out.bitrate, out.net].filter(Boolean).join('<br>');

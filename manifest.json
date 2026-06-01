@@ -1,0 +1,8 @@
+{
+  "name": "Teleprompter Mirror",
+  "short_name": "Teleprompter",
+  "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#4ecca3"
+}

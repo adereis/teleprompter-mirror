@@ -15,17 +15,19 @@ mirrored, acting as a teleprompter near the camera lens.
 
 - `mirror-server.py` — Python HTTP server (stdlib only, no deps). Binds to
   `127.0.0.1:8047` by default (localhost only — tablet connects via ADB reverse).
-  Serves the HTML pages and acts as the WebRTC signaling relay (SDP offer/answer
-  exchange via POST/GET). Rewrites Chrome mDNS ICE candidates to real LAN IPs
-  in `_fix_mdns()`. Supports `--bind` to override the bind address and `--ip`
-  to force a specific IP for mDNS rewrite.
-- `cast.html` — Laptop-side. Uses `getDisplayMedia()` + `RTCPeerConnection` to
-  capture and send a window. Shows WebRTC stats (encode time, FPS, bitrate, RTT,
-  jitter) after connection. Downscales 2x before encoding to reduce VP8 CPU load.
-  Optional crop mode: click "Crop" to draw a rectangle and stream only that region
-  via canvas + `requestVideoFrameCallback`. Uses `replaceTrack()` to switch between
-  direct and cropped streams without reconnecting. Crop adds a canvas step to the
-  pipeline; when disabled, the stream goes direct (no extra latency).
+  Serves HTML pages, static assets (icon, manifest), and acts as the WebRTC
+  signaling relay (SDP offer/answer exchange via POST/GET). Rewrites Chrome mDNS
+  ICE candidates to real LAN IPs in `_fix_mdns()`. Supports `--bind` to override
+  the bind address and `--ip` to force a specific IP for mDNS rewrite.
+- `cast.html` — Laptop-side. Two-column layout: video preview fills the left
+  area, controls/status/stats in a right sidebar. Uses `getDisplayMedia()` +
+  `RTCPeerConnection` to capture and send a window. Shows WebRTC stats (encode
+  time, FPS, bitrate, RTT, jitter) in the sidebar after connection. Downscales
+  to viewer resolution before encoding to reduce VP8 CPU load. Optional crop
+  mode: click "Crop" to draw a rectangle and stream only that region via canvas.
+  Uses `replaceTrack()` to switch between direct and cropped streams without
+  reconnecting. Crop adds a canvas step to the pipeline; when disabled, the
+  stream goes direct (no extra latency). Page title reflects connection state.
 - `view.html` — Tablet-side. Receives WebRTC stream and displays it fullscreen with
   horizontal flip (`scaleX(-1)` for teleprompter mirror effect). Sets
   `jitterBufferTarget=0` to minimize receive-side buffering on USB. Requests
