@@ -9,9 +9,11 @@ TARGET_HOME="$(eval echo ~"$TARGET_USER")"
 echo "Removing system hooks and desktop entry..."
 
 rm -f /etc/udev/rules.d/99-teleprompter-tablet.rules
+rm -f /etc/udev/rules.d/99-teleprompter-wifi.rules
 udevadm control --reload-rules
 
 rm -f /etc/systemd/system/teleprompter-tether-prompt.service
+rm -f /etc/systemd/system/teleprompter-wifi-rebind.service
 systemctl daemon-reload
 
 rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter

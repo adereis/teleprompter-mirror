@@ -9,13 +9,16 @@ TARGET_HOME="$(eval echo ~"$TARGET_USER")"
 
 echo "Installing for user: $TARGET_USER"
 
-echo "Installing udev rule..."
+echo "Installing udev rules..."
 cp "$SCRIPT_DIR/99-teleprompter-tablet.rules" /etc/udev/rules.d/
+cp "$SCRIPT_DIR/99-teleprompter-wifi.rules" /etc/udev/rules.d/
 udevadm control --reload-rules
 
-echo "Installing systemd service..."
+echo "Installing systemd services..."
 sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/teleprompter-tether-prompt.service" \
     > /etc/systemd/system/teleprompter-tether-prompt.service
+sed "s|__PROJECT_DIR__|$SCRIPT_DIR|g" "$SCRIPT_DIR/teleprompter-wifi-rebind.service" \
+    > /etc/systemd/system/teleprompter-wifi-rebind.service
 systemctl daemon-reload
 
 echo "Installing NetworkManager dispatchers..."
@@ -39,7 +42,9 @@ runuser -u "$TARGET_USER" -- update-desktop-database "$DESKTOP_DIR" 2>/dev/null 
 echo ""
 echo "Installed:"
 echo "  udev:    /etc/udev/rules.d/99-teleprompter-tablet.rules"
+echo "  udev:    /etc/udev/rules.d/99-teleprompter-wifi.rules"
 echo "  systemd: /etc/systemd/system/teleprompter-tether-prompt.service"
+echo "  systemd: /etc/systemd/system/teleprompter-wifi-rebind.service"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter-camera"
 echo "  desktop: $DESKTOP_DIR/teleprompter-mirror.desktop"
