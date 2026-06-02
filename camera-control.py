@@ -17,7 +17,7 @@ Usage:
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
-    camera-control.py keepalive         # Poll camera every 5 min to prevent WiFi timeout
+    camera-control.py keepalive         # Poll camera every 4 min to prevent WiFi timeout
 """
 
 import json
@@ -37,7 +37,7 @@ SSDP_TIMEOUT = 3
 
 DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
 DEFAULT_ZOOM = 40
-KEEPALIVE_INTERVAL = 300
+KEEPALIVE_INTERVAL = 240
 KEEPALIVE_PIDFILE = os.path.expanduser("~/tmp/camera-keepalive.pid")
 
 log = logging.getLogger("camera-control")
