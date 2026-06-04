@@ -17,13 +17,10 @@ Usage:
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
-    camera-control.py keepalive         # Poll camera every 60s to prevent WiFi timeout
 """
 
 import json
 import logging
-import os
-import signal
 import socket
 import sys
 import time
@@ -37,8 +34,6 @@ SSDP_TIMEOUT = 3
 
 DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
 DEFAULT_ZOOM = 40
-KEEPALIVE_INTERVAL = 60
-KEEPALIVE_PIDFILE = os.path.expanduser("~/tmp/camera-keepalive.pid")
 
 log = logging.getLogger("camera-control")
 
@@ -293,38 +288,6 @@ def cmd_reconnect(endpoint):
     sys.exit(1)
 
 
-def cmd_keepalive(endpoint):
-    """Poll camera periodically to prevent WiFi inactivity disconnect."""
-    def cleanup(signum=None, frame=None):
-        try:
-            os.remove(KEEPALIVE_PIDFILE)
-        except FileNotFoundError:
-            pass
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, cleanup)
-    signal.signal(signal.SIGINT, cleanup)
-
-    os.makedirs(os.path.dirname(KEEPALIVE_PIDFILE), exist_ok=True)
-    with open(KEEPALIVE_PIDFILE, "w") as f:
-        f.write(str(os.getpid()))
-
-    print(f"Keepalive started (PID {os.getpid()}, interval {KEEPALIVE_INTERVAL}s)")
-    try:
-        while True:
-            time.sleep(KEEPALIVE_INTERVAL)
-            result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
-            if result is None:
-                print("keepalive: camera unreachable, will retry")
-                continue
-            status = result[1].get("cameraStatus") if isinstance(result[1], dict) else None
-            if status == "NotReady":
-                print("keepalive: camera in NotReady state, waiting for NM dispatcher recovery")
-            else:
-                print("keepalive: OK")
-    finally:
-        cleanup()
-
 
 def cmd_apis(endpoint):
     """List all available API methods."""
@@ -359,8 +322,6 @@ def main():
         cmd_status(endpoint)
     elif cmd == "reconnect":
         cmd_reconnect(endpoint)
-    elif cmd == "keepalive":
-        cmd_keepalive(endpoint)
     elif cmd == "apis":
         cmd_apis(endpoint)
     else:

@@ -53,9 +53,9 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   zone), and ADB reverse port forwarding. No user action needed.
 - `99-teleprompter-camera` — NetworkManager dispatcher. Fires on `up` (initial
   connection) and `dhcp4-change` (lease renewal). On `up`, runs full reconnect
-  (startRecMode + zoom restore) then starts keepalive. On `dhcp4-change`, checks
-  if the keepalive process is still alive and restarts it if dead. This covers
-  KVM switch recovery where the WiFi re-associates without a full NM `up` cycle.
+  (startRecMode + zoom restore). On `dhcp4-change`, checks if the camera reset
+  to NotReady and runs reconnect if so. No keepalive — periodic HTTP pings were
+  found to cause WiFi AP resets on the A6300.
 - `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
   (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
   switches or port changes, the `mt7601u` driver sometimes fails to claim the
