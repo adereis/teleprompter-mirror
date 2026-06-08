@@ -138,6 +138,11 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   full Smart Remote Control app is installed (not Smart Remote Embedded). Sony
   discontinued PlayMemories Camera Apps, so the upgrade is no longer available.
   Workaround: use AF-C mode and trigger refocus via a small zoom nudge.
+- The A6300's WiFi AP resets when it receives frequent HTTP requests. Keepalive
+  pings at 60s caused 0.55 disassociations/hr; at 300s, 0.15/hr; with no pings,
+  zero disassociations over 92 hours. Do not poll the Camera Remote API unless
+  the user explicitly triggered a command. The NM dispatcher handles recovery
+  from any WiFi drops without needing periodic polling.
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
