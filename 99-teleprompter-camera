@@ -1,7 +1,8 @@
 #!/bin/bash
 # NetworkManager dispatcher script for camera WiFi reconnect.
-# Initializes the Sony A6300 when the Camera-A6300 WiFi profile comes up,
-# and re-initializes after WiFi re-associations (DHCP renewals).
+# Fires on `up` (initial connection) and `dhcp4-change` (lease renewal).
+# Only dhcp4-change runs reconnect — it always follows `up`, and checking
+# camera status first avoids duplicate reconnects when both events fire.
 
 IFACE="$1"
 ACTION="$2"
@@ -13,12 +14,9 @@ CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | c
 [ "$CONN" = "Camera-A6300" ] || exit 0
 
 if [ "$ACTION" = "up" ]; then
-    logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
-    runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 \
-        | logger -t teleprompter-camera &
+    logger -t teleprompter-camera "Camera WiFi connected on $IFACE"
 
 elif [ "$ACTION" = "dhcp4-change" ]; then
-    # Check if camera reset (WiFi re-association resets Smart Remote)
     STATUS=$(runuser -u __USER__ -- curl -s --connect-timeout 3 -X POST \
         -d '{"method":"getEvent","params":[false],"id":1,"version":"1.0"}' \
         http://192.168.122.1:8080/sony/camera 2>/dev/null \
