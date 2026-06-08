@@ -17,8 +17,9 @@ udevadm control --reload-rules
 echo "Installing systemd services..."
 sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/teleprompter-tether-prompt.service" \
     > /etc/systemd/system/teleprompter-tether-prompt.service
-sed "s|__PROJECT_DIR__|$SCRIPT_DIR|g" "$SCRIPT_DIR/teleprompter-wifi-rebind.service" \
-    > /etc/systemd/system/teleprompter-wifi-rebind.service
+cp "$SCRIPT_DIR/teleprompter-wifi-rebind.service" \
+    /etc/systemd/system/teleprompter-wifi-rebind.service
+install -Dm755 "$SCRIPT_DIR/wifi-rebind.sh" /usr/local/libexec/teleprompter-wifi-rebind.sh
 systemctl daemon-reload
 
 echo "Installing NetworkManager dispatchers..."
@@ -45,6 +46,7 @@ echo "  udev:    /etc/udev/rules.d/99-teleprompter-tablet.rules"
 echo "  udev:    /etc/udev/rules.d/99-teleprompter-wifi.rules"
 echo "  systemd: /etc/systemd/system/teleprompter-tether-prompt.service"
 echo "  systemd: /etc/systemd/system/teleprompter-wifi-rebind.service"
+echo "  script:  /usr/local/libexec/teleprompter-wifi-rebind.sh"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter-camera"
 echo "  desktop: $DESKTOP_DIR/teleprompter-mirror.desktop"

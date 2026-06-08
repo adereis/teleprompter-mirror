@@ -3,4 +3,4 @@ Description=Re-probe MT7601U WiFi adapter if driver fails to bind
 
 [Service]
 Type=oneshot
-ExecStart=__PROJECT_DIR__/wifi-rebind.sh
+ExecStart=/usr/local/libexec/teleprompter-wifi-rebind.sh

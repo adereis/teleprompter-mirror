@@ -14,6 +14,7 @@ udevadm control --reload-rules
 
 rm -f /etc/systemd/system/teleprompter-tether-prompt.service
 rm -f /etc/systemd/system/teleprompter-wifi-rebind.service
+rm -f /usr/local/libexec/teleprompter-wifi-rebind.sh
 systemctl daemon-reload
 
 rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter
