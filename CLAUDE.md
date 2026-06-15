@@ -35,10 +35,15 @@ mirrored, acting as a teleprompter near the camera lens.
 - `latency-test.html` — Visual latency measurement. Displays a millisecond clock
   that can be shared to the tablet; photograph both screens to measure delay.
 - `open-cast.sh` — Opens `/cast` in Chrome's `--app` mode (standalone window,
-  separate taskbar entry, keeps Chrome Tab capture in getDisplayMedia).
+  separate taskbar entry, keeps Chrome Tab capture in getDisplayMedia). Shows a
+  zenity error dialog if the server isn't running.
 - `start-mirror.sh` — One-command USB tethering + server startup. Supports
   `usb` (full setup), `reconnect` (re-enable USB without restarting server),
   and no-argument (server only) modes.
+- `teleprompter-mirror.service` — systemd user service template. Installed to
+  `~/.config/systemd/user/` by `install.sh`. Auto-starts the mirror server at
+  login (`WantedBy=graphical-session.target`), restarts on failure, stops on
+  logout (`PartOf`). Uses `__PROJECT_DIR__` placeholder like the desktop entry.
 
 ### KVM switch automation
 
@@ -73,10 +78,11 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   and driver re-probe. Retries up to 3 times. Logs to `teleprompter-wifi`
   syslog tag. If the device dropped from sysfs entirely (EPROTO), logs a
   warning — physical replug is needed.
-- `install.sh` — Installs system hooks and desktop entry (run with sudo).
-  Substitutes `__USER__` and `__PROJECT_DIR__` placeholders with runtime
-  values so the source files contain no hardcoded paths or usernames.
-- `uninstall.sh` — Removes all files installed by `install.sh`.
+- `install.sh` — Installs system hooks, desktop entry, and user service (run
+  with sudo). Substitutes `__USER__` and `__PROJECT_DIR__` placeholders with
+  runtime values so the source files contain no hardcoded paths or usernames.
+- `uninstall.sh` — Removes all files installed by `install.sh` (including the
+  user service — disables and stops it first).
 - `teleprompter-mirror.desktop` — Desktop entry template. Installed to
   `~/.local/share/applications/` by `install.sh`.
 

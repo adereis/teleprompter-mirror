@@ -17,6 +17,13 @@ rm -f /etc/systemd/system/teleprompter-wifi-rebind.service
 rm -f /usr/local/libexec/teleprompter-wifi-rebind.sh
 systemctl daemon-reload
 
+XDG_DIR="/run/user/$(id -u "$TARGET_USER")"
+runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+    systemctl --user disable --now teleprompter-mirror.service 2>/dev/null || true
+rm -f "$TARGET_HOME/.config/systemd/user/teleprompter-mirror.service"
+runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+    systemctl --user daemon-reload 2>/dev/null || true
+
 rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter
 rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 

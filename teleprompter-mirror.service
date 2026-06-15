@@ -1,0 +1,14 @@
+[Unit]
+Description=Teleprompter Mirror signaling server (localhost:8047)
+PartOf=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/mirror-server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
