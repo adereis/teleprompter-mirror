@@ -55,7 +55,11 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   settings on the tablet via ADB. The user just taps the toggle.
 - `99-teleprompter` — NetworkManager dispatcher. Fires when `usb0` comes up
   after tethering is enabled. Fixes routing (never-default), firewall (trusted
-  zone), and ADB reverse port forwarding. No user action needed.
+  zone), and ADB reverse port forwarding. No user action needed. Uses a
+  dual-check filter: connection name must match `"Wired connection"*` AND
+  the network driver must be `rndis_host` or `cdc_ether` (Android USB
+  tethering). The driver check prevents poisoning Thunderbolt dock ethernet,
+  which also auto-creates as `"Wired connection N"` before being renamed.
 - `99-teleprompter-camera` — NetworkManager dispatcher. Fires on `up` (initial
   connection) and `dhcp4-change` (lease renewal). On `up`, logs the connection.
   On `dhcp4-change`, checks if the camera reset to NotReady and runs reconnect
@@ -163,10 +167,12 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   the HDMI capture's `priority.session` above the built-in camera so the
   external camera is preferred. Both cameras remain available in app dropdowns.
 - The `99-teleprompter` NM dispatcher must only match tablet USB tethering
-  connections, not all USB ethernet. It matches by NM connection name
-  (`Wired connection *`), not by interface name pattern. The old `enp*u*` pattern
-  was too broad and would set `never-default yes` on the main ethernet (also USB
-  via Thunderbolt), breaking internet connectivity.
+  connections, not all USB ethernet. It uses a dual-check filter: NM connection
+  name (`Wired connection *`) AND network driver (`rndis_host` or `cdc_ether`).
+  Connection name alone is insufficient — Thunderbolt dock ethernet also
+  auto-creates as `"Wired connection N"` and would get `never-default yes` set
+  on it, breaking internet connectivity. The driver check is authoritative:
+  only Android USB tethering uses `rndis_host`/`cdc_ether`.
 
 ## Security and privacy rules
 
@@ -201,12 +207,13 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
   it never becomes a route to the internet.
 ### Dispatcher and system hooks
 
-- **Match tablet connections by NM connection name** (`Wired connection *`), not
-  by interface name patterns. USB interface names (`enp*u*`) are ambiguous — the
-  main ethernet is also USB (via Thunderbolt).
+- **Match tablet connections by NM connection name AND network driver.** Name
+  alone (`Wired connection *`) is ambiguous — Thunderbolt dock ethernet also
+  auto-creates with that name. The driver check (`rndis_host` or `cdc_ether`)
+  is authoritative for Android USB tethering.
 - **Never set `never-default` or change firewall zones** on named connection
   profiles (like `Ethernet`). Only auto-created `Wired connection N` profiles
-  should be modified by dispatchers.
+  with a tethering driver should be modified by dispatchers.
 
 ## Environment
 

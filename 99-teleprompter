@@ -7,9 +7,14 @@ ACTION="$2"
 
 [ "$ACTION" = "up" ] || exit 0
 
-# Only act on the tablet USB tethering connection, not other USB ethernet
+# Only act on the tablet USB tethering connection, not other USB ethernet.
+# Name check alone isn't enough: Thunderbolt dock ethernet also starts as
+# "Wired connection N" before being renamed — the driver check prevents
+# poisoning its routing with never-default.
 CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
 case "$CONN" in "Wired connection"*) ;; *) exit 0 ;; esac
+DRIVER=$(basename "$(readlink "/sys/class/net/$IFACE/device/driver" 2>/dev/null)" 2>/dev/null)
+case "$DRIVER" in rndis_host|cdc_ether) ;; *) exit 0 ;; esac
 
 logger -t teleprompter "Tablet tethering on $IFACE ($CONN) — configuring"
 
