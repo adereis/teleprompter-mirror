@@ -1,30 +1,19 @@
 #!/bin/bash
 # NetworkManager dispatcher script for camera WiFi reconnect.
-# Fires on `up` (initial connection) and `dhcp4-change` (lease renewal).
-# Only dhcp4-change runs reconnect — it always follows `up`, and checking
-# camera status first avoids duplicate reconnects when both events fire.
+# Only fires on `up` — when the Camera-A6300 WiFi connection activates.
+# Does NOT act on dhcp4-change: routine DHCP renewals (~every 27 min)
+# would hit the camera API, and the A6300's WiFi AP crashes under
+# accumulated HTTP requests (even at low frequency).
 
 IFACE="$1"
 ACTION="$2"
 
-[ "$ACTION" = "up" ] || [ "$ACTION" = "dhcp4-change" ] || exit 0
+[ "$ACTION" = "up" ] || exit 0
 
 # Only act on the camera WiFi connection
 CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
 [ "$CONN" = "Camera-A6300" ] || exit 0
 
-if [ "$ACTION" = "up" ]; then
-    logger -t teleprompter-camera "Camera WiFi connected on $IFACE"
-
-elif [ "$ACTION" = "dhcp4-change" ]; then
-    STATUS=$(runuser -u __USER__ -- curl -s --connect-timeout 3 -X POST \
-        -d '{"method":"getEvent","params":[false],"id":1,"version":"1.0"}' \
-        http://192.168.122.1:8080/sony/camera 2>/dev/null \
-        | runuser -u __USER__ -- python3 -c \
-        "import sys,json; print(json.load(sys.stdin)['result'][1]['cameraStatus'])" 2>/dev/null)
-    if [ "$STATUS" = "NotReady" ]; then
-        logger -t teleprompter-camera "Camera reset on $IFACE — running reconnect"
-        runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 \
-            | logger -t teleprompter-camera &
-    fi
-fi
+logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
+runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 \
+    | logger -t teleprompter-camera &
