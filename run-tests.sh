@@ -22,7 +22,7 @@ echo "ok"
 
 echo
 echo "== Shell syntax (bash -n) =="
-mapfile -t scripts < <(git ls-files '*.sh' \
+mapfile -t scripts < <(git ls-files '*.sh' '.githooks/pre-commit' \
     'system/networkmanager/99-teleprompter' 'system/networkmanager/99-teleprompter-camera')
 for s in "${scripts[@]}"; do
     bash -n "$s" && echo "  ok: $s"

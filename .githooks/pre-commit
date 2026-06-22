@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# Pre-commit guard against leaking machine-specific or sensitive values into
+# this public repo. Scans the STAGED diff (added lines only) and blocks the
+# commit when it finds something that must never be published.
+#
+# Enable once per clone (the hook lives in-tree so it survives fresh clones):
+#
+#     git config core.hooksPath .githooks
+#
+# Bypass for a vetted false positive (use sparingly, and prefer fixing the
+# pattern lists below instead):
+#
+#     git commit --no-verify
+#
+set -u
+
+# --- Configuration -----------------------------------------------------------
+
+# Real local account names this project has been developed under. The public
+# source uses the __USER__ placeholder (substituted at install time) instead.
+# Matched case-sensitively as whole lowercase words, so the "Ademar Reis"
+# author name and the email addresses below are unaffected.
+USERNAMES='ademar|areis'
+
+# Placeholders and documented example values that look sensitive but are safe.
+# They are blanked out before scanning so the template files pass cleanly.
+ALLOW='__USER__|__PROJECT_DIR__|__RDP_PASSWORD__|__CAMERA_CONNECTION__|your-camera-password|new-password|DIRECT-xxxx|DIRECT-newSSID|abcd1234-12ab-34cd-56ef-1234567890ab'
+
+# --- Collect staged additions ------------------------------------------------
+
+# Added lines only ('+...'), minus the '+++ b/file' diff headers. This hook is
+# excluded from its own scan: its USERNAMES/ALLOW lists necessarily contain the
+# very tokens it forbids, so scanning it would always self-trigger.
+added=$(git diff --cached --no-color -U0 -- . ':(exclude).githooks/pre-commit' \
+  | grep '^+' | grep -v '^+++' | sed 's/^+//')
+[ -z "$added" ] && exit 0
+
+# Blank out allowed placeholders and any email address so they never trigger a
+# rule. Everything that survives is a candidate leak.
+scan=$(printf '%s\n' "$added" \
+  | sed -E "s/(${ALLOW})//g" \
+  | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}//g')
+
+fail=0
+check() {
+  # check <description> <grep-flags> <pattern>
+  local desc=$1 flags=$2 pattern=$3 hits
+  hits=$(printf '%s\n' "$scan" | grep "$flags" "$pattern") || return 0
+  printf '  ✗ %s:\n' "$desc"
+  printf '%s\n' "$hits" | sed 's/^/      /'
+  fail=1
+}
+
+# --- Rules -------------------------------------------------------------------
+
+check "MAC address" \
+  -nE '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}'
+
+check "real home directory path (use the __USER__ placeholder)" \
+  -nE '/(home|Users)/[A-Za-z0-9]'
+
+check "local username (use the __USER__ placeholder)" \
+  -nwE "${USERNAMES}"
+
+check "credential assignment with a real value" \
+  -nE '\b(PASSWORD|PASSWD|PSK|SECRET|TOKEN|API_?KEY|PRE_?SHARED_?KEY)[[:space:]]*=[[:space:]]*["'"'"']?[^"'"'"'[:space:]]{3,}'
+
+check "WiFi PSK / SSID with a real value" \
+  -nE '(wifi-sec\.psk|802-11-wireless-security\.psk)[[:space:]]+["'"'"'][^"'"'"']{3,}|DIRECT-[A-Za-z0-9]+:ILCE'
+
+check "private key material" \
+  -nE 'BEGIN [A-Z ]*PRIVATE KEY'
+
+# --- Verdict -----------------------------------------------------------------
+
+if [ "$fail" -ne 0 ]; then
+  cat >&2 <<'EOF'
+
+  ─────────────────────────────────────────────────────────────────
+  COMMIT BLOCKED: the staged changes contain values that must not be
+  committed to this public repository (see matches above).
+
+  Fix: replace the value with a placeholder (__USER__, __PROJECT_DIR__)
+  and substitute it at install time, or move the secret outside the repo
+  (e.g. ~/.config/teleprompter-mirror/config.env).
+
+  If this is a genuine false positive, add the safe token to the ALLOW
+  list in .githooks/pre-commit, or bypass once with: git commit --no-verify
+  ─────────────────────────────────────────────────────────────────
+EOF
+  exit 1
+fi
+
+exit 0

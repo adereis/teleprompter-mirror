@@ -23,6 +23,7 @@ system/     install.sh, uninstall.sh, *.desktop, wifi-rebind.sh
             udev/ *.rules · systemd/ *.service · networkmanager/ 99-teleprompter[-camera]
 docs/       CAMERA.md
 tests/      loader.py, test_*.py
+.githooks/  pre-commit                               (secret-leak guard)
 ```
 
 Cross-directory wiring to keep in mind when moving things:
@@ -241,6 +242,13 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
   NetworkManager profiles, not in code.
 - **Check before committing**: `git diff --cached | grep -iE 'password|secret|ssid'`
   should return nothing. If a value is user-specific, it doesn't belong in the repo.
+- **Automated guard**: `.githooks/pre-commit` scans staged additions for MAC
+  addresses, real home paths / usernames, credential assignments, WiFi PSK/SSID
+  values, and private keys, and blocks the commit on a match. It is **not**
+  active until enabled per clone — run `git config core.hooksPath .githooks`
+  once after cloning. Documented placeholders are allow-listed; extend the
+  `USERNAMES`/`ALLOW` lists in the hook when adding a new machine or template
+  value. Bypass a vetted false positive with `git commit --no-verify`.
 
 ### Network isolation
 
