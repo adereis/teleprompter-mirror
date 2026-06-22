@@ -33,7 +33,7 @@ setup_usb() {
     fi
 
     echo "Waiting for USB network interface..."
-    for i in $(seq 1 15); do
+    for _ in $(seq 1 15); do
         USB_IF=$(ip -o link show 2>/dev/null | grep -oP '(usb\d+|enp\S+|enx\S+)(?=:)' | head -1)
         if [ -n "$USB_IF" ]; then
             break
@@ -68,7 +68,7 @@ setup_usb() {
         && echo "Firewall: $USB_IF → trusted zone"
 
     # Wait for IP assignment
-    for i in $(seq 1 5); do
+    for _ in $(seq 1 5); do
         USB_IP=$(ip -4 addr show "$USB_IF" 2>/dev/null | grep -oP '(?<=inet )\S+(?=/)') || true
         if [ -n "$USB_IP" ]; then break; fi
         sleep 1
@@ -76,7 +76,7 @@ setup_usb() {
     echo "USB IP: ${USB_IP:-not assigned yet}"
 
     # Set up ADB reverse for signaling fallback
-    adb reverse tcp:$PORT tcp:$PORT 2>/dev/null && echo "ADB reverse: localhost:$PORT → laptop"
+    adb reverse "tcp:$PORT" "tcp:$PORT" 2>/dev/null && echo "ADB reverse: localhost:$PORT → laptop"
 }
 
 case "${1:-}" in

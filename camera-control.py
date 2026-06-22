@@ -85,6 +85,15 @@ def discover():
     with urllib.request.urlopen(location, timeout=5) as resp:
         dd_xml = resp.read().decode()
 
+    return parse_device_descriptor(dd_xml)
+
+
+def parse_device_descriptor(dd_xml):
+    """Extract (model, camera API endpoint) from a UPnP device descriptor.
+
+    Returns the model name (or "Unknown") and the camera service's
+    ActionList URL, or None for the endpoint if no camera service is present.
+    """
     ns = {
         "av": "urn:schemas-sony-com:av",
         "upnp": "urn:schemas-upnp-org:device-1-0",
