@@ -106,12 +106,14 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   the network driver must be `rndis_host` or `cdc_ether` (Android USB
   tethering). The driver check prevents poisoning Thunderbolt dock ethernet,
   which also auto-creates as `"Wired connection N"` before being renamed.
-- `99-teleprompter-camera` — NetworkManager dispatcher. Fires only on `up`
-  (WiFi connection activation). Runs `camera-control.py reconnect` to
-  re-initialize Smart Remote. Does NOT act on `dhcp4-change` — the A6300's
-  DHCP lease is 1 hour (renewal every ~27 min), and each renewal would hit
-  the camera API; accumulated HTTP requests crash the WiFi AP even at low
-  frequency. No keepalive or periodic polling of any kind.
+- `99-teleprompter-camera` — NetworkManager dispatcher. Acts on `up` (runs
+  `camera-control.py reconnect` to re-initialize Smart Remote) and `down`
+  (logs disconnection for retrospective analysis). Uses `CONNECTION_ID` env
+  var to identify the connection, which works for both `up` and `down` events.
+  Does NOT act on `dhcp4-change` — the A6300's DHCP lease is 1 hour (renewal
+  every ~27 min), and each renewal would hit the camera API; accumulated HTTP
+  requests crash the WiFi AP even at low frequency. No keepalive or periodic
+  polling of any kind.
 - `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
   (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
   switches or port changes, the `mt7601u` driver sometimes fails to claim the

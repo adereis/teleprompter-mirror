@@ -1,20 +1,24 @@
 #!/bin/bash
-# NetworkManager dispatcher script for camera WiFi reconnect.
-# Only fires on `up` — when the Camera-A6300 WiFi connection activates.
-# Does NOT act on dhcp4-change: routine DHCP renewals (~every 27 min)
-# would hit the camera API, and the A6300's WiFi AP crashes under
-# accumulated HTTP requests (even at low frequency).
+# NetworkManager dispatcher script for camera WiFi.
+# Logs connection state changes for retrospective analysis.
+# Only runs camera-control.py on `up` — never on dhcp4-change or other
+# events, because the A6300's WiFi AP crashes under accumulated HTTP
+# requests (even at low frequency).
 
 IFACE="$1"
 ACTION="$2"
 
-[ "$ACTION" = "up" ] || exit 0
+# CONNECTION_ID is set by NM for all dispatcher actions (works on down too,
+# unlike nmcli --active which can't see a deactivated connection).
+[ "$CONNECTION_ID" = "__CAMERA_CONNECTION__" ] || exit 0
 
-# Only act on the camera WiFi connection (name substituted at install time
-# from TELEPROMPTER_CAMERA_CONNECTION; defaults to Camera-A6300).
-CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
-[ "$CONN" = "__CAMERA_CONNECTION__" ] || exit 0
-
-logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
-runuser -u __USER__ -- __PROJECT_DIR__/camera/camera-control.py reconnect 2>&1 \
-    | logger -t teleprompter-camera &
+case "$ACTION" in
+    up)
+        logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
+        runuser -u __USER__ -- __PROJECT_DIR__/camera/camera-control.py reconnect 2>&1 \
+            | logger -t teleprompter-camera &
+        ;;
+    down)
+        logger -t teleprompter-camera "Camera WiFi disconnected on $IFACE"
+        ;;
+esac
