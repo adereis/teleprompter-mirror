@@ -1,8 +1,12 @@
 #!/bin/bash
-# Open the Teleprompter Mirror cast page as a standalone Chrome app window.
+# Open the Teleprompter Mirror cast page as a standalone browser app window.
 # Requires mirror-server.py to be running (start it with ./start-mirror.sh).
 
-PORT=${1:-8047}
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/config.sh
+. "$SCRIPT_DIR/lib/config.sh"
+
+PORT=${1:-$TELEPROMPTER_PORT}
 URL="http://localhost:$PORT/cast"
 WM_CLASS=teleprompter-mirror
 
@@ -19,4 +23,4 @@ Check status with:
     exit 1
 fi
 
-exec google-chrome --app="$URL" --class="$WM_CLASS" 2>/dev/null
+exec "$TELEPROMPTER_BROWSER" --app="$URL" --class="$WM_CLASS" 2>/dev/null

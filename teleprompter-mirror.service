@@ -6,6 +6,9 @@ StartLimitBurst=5
 
 [Service]
 Type=exec
+# Optional per-machine overrides (port, bind address). The leading '-' makes
+# the file optional, so the service starts fine with the built-in defaults.
+EnvironmentFile=-%h/.config/teleprompter-mirror/config.env
 ExecStart=/usr/bin/python3 __PROJECT_DIR__/mirror-server.py
 Restart=always
 RestartSec=5

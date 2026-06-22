@@ -10,9 +10,10 @@ ACTION="$2"
 
 [ "$ACTION" = "up" ] || exit 0
 
-# Only act on the camera WiFi connection
+# Only act on the camera WiFi connection (name substituted at install time
+# from TELEPROMPTER_CAMERA_CONNECTION; defaults to Camera-A6300).
 CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
-[ "$CONN" = "Camera-A6300" ] || exit 0
+[ "$CONN" = "__CAMERA_CONNECTION__" ] || exit 0
 
 logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
 runuser -u __USER__ -- __PROJECT_DIR__/camera-control.py reconnect 2>&1 \

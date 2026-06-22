@@ -27,12 +27,16 @@ import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
+import teleprompter_config
+
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
 SSDP_ST = "urn:schemas-sony-com:service:ScalarWebAPI:1"
 SSDP_TIMEOUT = 3
 
-DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
+# Endpoint comes from config (env or ~/.config/teleprompter-mirror/config.env),
+# falling back to the A6300's fixed soft-AP address.
+DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
 DEFAULT_ZOOM_DURATION = 0.8
 
 log = logging.getLogger("camera-control")

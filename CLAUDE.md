@@ -11,6 +11,30 @@ mirrored, acting as a teleprompter near the camera lens.
 
 ## Architecture
 
+### Configuration
+
+Environment-specific values are kept out of the source via a single
+`KEY=value` config file at `~/.config/teleprompter-mirror/config.env`
+(`config.example.env` is the documented template). Defaults live in two
+mirrored places — `lib/config.sh` (bash) and `teleprompter_config.py`
+(Python) — and both resolve values as **environment > config file >
+built-in default**.
+
+- `lib/config.sh` — sourced by `start-mirror.sh` and `open-cast.sh`. Exports
+  `TELEPROMPTER_*` so child processes (the server) inherit them.
+- `teleprompter_config.py` — imported by `mirror-server.py` and
+  `camera-control.py`. Parses the same file (stdlib only).
+- `teleprompter-mirror.service` reads the file via `EnvironmentFile=-` so the
+  systemd-managed server honors the same config.
+- `install.sh` bakes `TELEPROMPTER_CAMERA_CONNECTION` into the NM camera
+  dispatcher (`__CAMERA_CONNECTION__` placeholder) because dispatchers run as
+  root and can't read the user's config at runtime. Re-run `install.sh` after
+  changing that value.
+
+When adding a new tunable: add it to `DEFAULTS` in `teleprompter_config.py`,
+the defaults block + export list in `lib/config.sh`, and `config.example.env`.
+Keep the three in sync.
+
 ### WebRTC mirror
 
 - `mirror-server.py` — Python HTTP server (stdlib only, no deps). Binds to

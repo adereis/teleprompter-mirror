@@ -9,7 +9,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PORT=8047
+# shellcheck source=lib/config.sh
+. "$SCRIPT_DIR/lib/config.sh"
+PORT="$TELEPROMPTER_PORT"
 
 setup_usb() {
     if ! adb devices 2>/dev/null | grep -q "device$"; then

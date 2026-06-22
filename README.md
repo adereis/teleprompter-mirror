@@ -27,6 +27,33 @@ forwarding (set up automatically by `start-mirror.sh`).
 | `/view` | Tablet viewer (mirrored, fullscreen, auto-reconnect) |
 | `/latency` | Visual latency measurement tool |
 
+## Configuration
+
+Everything has a sensible built-in default, so the tools run out of the box.
+To adapt the setup to a different machine — a different browser, port, or camera
+WiFi profile — copy the example config and edit it:
+
+```bash
+mkdir -p ~/.config/teleprompter-mirror
+cp config.example.env ~/.config/teleprompter-mirror/config.env
+```
+
+| Setting | Default | Used for |
+|---------|---------|----------|
+| `TELEPROMPTER_PORT` | `8047` | Signaling server port |
+| `TELEPROMPTER_BIND` | `127.0.0.1` | Server bind address (keep on localhost) |
+| `TELEPROMPTER_BROWSER` | `google-chrome` | Browser for the cast app window |
+| `TELEPROMPTER_CAMERA_CONNECTION` | `Camera-A6300` | NetworkManager profile for the camera AP |
+| `TELEPROMPTER_CAMERA_ENDPOINT` | `http://192.168.122.1:8080/sony` | Camera Remote API base URL |
+
+The same file is read by the bash scripts, the Python tools, and the systemd
+user service. Values resolve as **environment variable > config file > default**,
+so a one-off `TELEPROMPTER_PORT=9000 ./start-mirror.sh` still works. The config
+file lives outside the repo (`~/.config`), so machine-specific values never get
+committed. Re-run `sudo ./install.sh` after changing
+`TELEPROMPTER_CAMERA_CONNECTION`, since that value is baked into the installed
+NetworkManager dispatcher.
+
 ## USB tethering
 
 USB tethering provides lower latency (~90ms) and a secure direct link.

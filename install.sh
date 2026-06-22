@@ -9,6 +9,25 @@ TARGET_HOME="$(eval echo ~"$TARGET_USER")"
 
 echo "Installing for user: $TARGET_USER"
 
+# Resolve environment-specific values that must be baked into system files
+# (NetworkManager dispatchers can't read the user's config at runtime). The
+# runtime tools read ~/.config/teleprompter-mirror/config.env directly, so only
+# the values install.sh hard-substitutes need to be looked up here.
+CONFIG_FILE="$TARGET_HOME/.config/teleprompter-mirror/config.env"
+read_config() {
+    local key="$1" default="$2" val=""
+    if [ -f "$CONFIG_FILE" ]; then
+        val=$(grep -E "^[[:space:]]*(export[[:space:]]+)?$key=" "$CONFIG_FILE" \
+              | tail -1 | cut -d= -f2-)
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%\"}"; val="${val#\"}"
+        val="${val%\'}"; val="${val#\'}"
+    fi
+    echo "${val:-$default}"
+}
+CAMERA_CONNECTION="$(read_config TELEPROMPTER_CAMERA_CONNECTION Camera-A6300)"
+echo "Camera WiFi connection: $CAMERA_CONNECTION"
+
 echo "Installing udev rules..."
 cp "$SCRIPT_DIR/99-teleprompter-tablet.rules" /etc/udev/rules.d/
 cp "$SCRIPT_DIR/99-teleprompter-wifi.rules" /etc/udev/rules.d/
@@ -28,6 +47,7 @@ sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/99-teleprompter" \
 chmod +x /etc/NetworkManager/dispatcher.d/99-teleprompter
 
 sed -e "s/__USER__/$TARGET_USER/g" -e "s|__PROJECT_DIR__|$SCRIPT_DIR|g" \
+    -e "s|__CAMERA_CONNECTION__|$CAMERA_CONNECTION|g" \
     "$SCRIPT_DIR/99-teleprompter-camera" \
     > /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 chmod +x /etc/NetworkManager/dispatcher.d/99-teleprompter-camera

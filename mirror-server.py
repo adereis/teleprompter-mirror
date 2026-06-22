@@ -9,6 +9,8 @@ import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
+import teleprompter_config
+
 STATIC_DIR = Path(__file__).parent
 LAN_IPS = []
 
@@ -121,10 +123,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    cfg = teleprompter_config.load()
     parser = argparse.ArgumentParser(description="Teleprompter mirror signaling server")
-    parser.add_argument("-p", "--port", type=int, default=8047)
-    parser.add_argument("--bind", default="127.0.0.1",
-                        help="Bind address (default: 127.0.0.1 — localhost only)")
+    parser.add_argument("-p", "--port", type=int, default=int(cfg["TELEPROMPTER_PORT"]),
+                        help="Listen port (default: %(default)s)")
+    parser.add_argument("--bind", default=cfg["TELEPROMPTER_BIND"],
+                        help="Bind address (default: %(default)s — localhost only)")
     parser.add_argument("--ip", help="Override LAN IP (default: auto-detect all)")
     args = parser.parse_args()
 
