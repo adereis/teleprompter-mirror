@@ -1,10 +1,11 @@
 #!/bin/bash
 # Open the Teleprompter Mirror cast page as a standalone browser app window.
-# Requires mirror-server.py to be running (start it with ./start-mirror.sh).
+# Requires the mirror server to be running (start it with bin/start-mirror.sh).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=lib/config.sh
-. "$SCRIPT_DIR/lib/config.sh"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=../lib/config.sh
+. "$PROJECT_DIR/lib/config.sh"
 
 PORT=${1:-$TELEPROMPTER_PORT}
 URL="http://localhost:$PORT/cast"

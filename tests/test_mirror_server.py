@@ -10,7 +10,7 @@ import unittest
 
 from loader import load_module
 
-server = load_module("mirror-server.py", "mirror_server")
+server = load_module("app/mirror-server.py", "mirror_server")
 
 MDNS_HOST = "abcd1234-12ab-34cd-56ef-1234567890ab.local"
 

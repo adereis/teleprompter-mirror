@@ -2,11 +2,7 @@
 
 import unittest
 
-from loader import ROOT
-import sys
-
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+import loader  # noqa: F401  (importing puts lib/ on sys.path)
 import teleprompter_config as cfg
 
 

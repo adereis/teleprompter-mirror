@@ -9,7 +9,7 @@ import unittest
 
 from loader import load_module
 
-cam = load_module("camera-control.py", "camera_control")
+cam = load_module("camera/camera-control.py", "camera_control")
 
 # Trimmed Sony-style device descriptor: UPnP modelName plus the Sony
 # ScalarWebAPI service list that advertises the camera endpoint.

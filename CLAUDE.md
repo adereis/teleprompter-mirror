@@ -11,19 +11,40 @@ mirrored, acting as a teleprompter near the camera lens.
 
 ## Architecture
 
+The repo is grouped by purpose. Component names below are basenames; this map
+gives their home directory:
+
+```
+app/        mirror-server.py, cast.html, view.html, latency-test.html, icon.svg, manifest.json
+camera/     camera-control.py
+lib/        config.sh, teleprompter_config.py        (shared config)
+bin/        start-mirror.sh, open-cast.sh            (user launchers)
+system/     install.sh, uninstall.sh, *.desktop, wifi-rebind.sh
+            udev/ *.rules · systemd/ *.service · networkmanager/ 99-teleprompter[-camera]
+docs/       CAMERA.md
+tests/      loader.py, test_*.py
+```
+
+Cross-directory wiring to keep in mind when moving things:
+- `app/mirror-server.py` and `camera/camera-control.py` add `../lib` to
+  `sys.path` before `import teleprompter_config`.
+- `bin/*.sh` source `../lib/config.sh`; `system/install.sh` substitutes
+  `__PROJECT_DIR__` with the **repo root** (its own parent), so the baked
+  paths are `app/mirror-server.py`, `bin/open-cast.sh`, `camera/camera-control.py`.
+
 ### Configuration
 
 Environment-specific values are kept out of the source via a single
 `KEY=value` config file at `~/.config/teleprompter-mirror/config.env`
 (`config.example.env` is the documented template). Defaults live in two
-mirrored places — `lib/config.sh` (bash) and `teleprompter_config.py`
+mirrored places — `lib/config.sh` (bash) and `lib/teleprompter_config.py`
 (Python) — and both resolve values as **environment > config file >
 built-in default**.
 
-- `lib/config.sh` — sourced by `start-mirror.sh` and `open-cast.sh`. Exports
-  `TELEPROMPTER_*` so child processes (the server) inherit them.
-- `teleprompter_config.py` — imported by `mirror-server.py` and
-  `camera-control.py`. Parses the same file (stdlib only).
+- `lib/config.sh` — sourced by `bin/start-mirror.sh` and `bin/open-cast.sh`.
+  Exports `TELEPROMPTER_*` so child processes (the server) inherit them.
+- `lib/teleprompter_config.py` — imported by `app/mirror-server.py` and
+  `camera/camera-control.py`. Parses the same file (stdlib only).
 - `teleprompter-mirror.service` reads the file via `EnvironmentFile=-` so the
   systemd-managed server honors the same config.
 - `install.sh` bakes `TELEPROMPTER_CAMERA_CONNECTION` into the NM camera
@@ -31,7 +52,7 @@ built-in default**.
   root and can't read the user's config at runtime. Re-run `install.sh` after
   changing that value.
 
-When adding a new tunable: add it to `DEFAULTS` in `teleprompter_config.py`,
+When adding a new tunable: add it to `DEFAULTS` in `lib/teleprompter_config.py`,
 the defaults block + export list in `lib/config.sh`, and `config.example.env`.
 Keep the three in sync.
 
@@ -126,19 +147,14 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   The camera's WiFi AP uses `192.168.122.0/24` — libvirt's default network was
   moved to `192.168.124.0/24` to avoid a subnet collision.
 
-### Non-functional prototypes
-
-- `cast-region.py` — Native GStreamer/PipeWire screen capture prototype. Blocked
-  by GNOME 49's `object.register=false` on screencast PipeWire nodes. Kept for
-  reference; see docstring for details.
-
 ### Tests
 
 - `tests/` holds stdlib `unittest` tests (no pytest dependency). `run-tests.sh`
   runs them plus `py_compile` and `shellcheck`. There's no CI — run it locally.
-- `mirror-server.py` and `camera-control.py` have hyphens, so they can't be
-  imported normally. `tests/loader.py` loads them by path via `importlib`, with
-  the repo root on `sys.path` so their `import teleprompter_config` resolves.
+- `app/mirror-server.py` and `camera/camera-control.py` have hyphens, so they
+  can't be imported normally. `tests/loader.py` loads them by path via
+  `importlib` and puts `lib/` on `sys.path` so `import teleprompter_config`
+  resolves.
 - Network/hardware code is kept at arm's length from logic so the pure parts are
   testable: `_fix_mdns` (SDP rewriting) and `parse_device_descriptor` (camera
   SSDP XML) take strings and return values, with no I/O.
@@ -172,9 +188,10 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - GStreamer's `pipewiresrc` cannot consume GNOME Shell's screencast portal
   streams on GNOME 49 / PipeWire 1.4.x. GNOME creates the screencast node
   with `object.register=false`, making it invisible to pipewiresrc's
-  registry-based discovery. The `cast-region.py` prototype is blocked by
-  this. The workaround is `cast.html`'s crop mode, which uses Chrome's
-  `getDisplayMedia()` + canvas crop instead.
+  registry-based discovery. This blocks any native PipeWire capture approach;
+  a prototype attempting it was removed (see git history). The working solution
+  is `app/cast.html`'s crop mode, which uses Chrome's `getDisplayMedia()` +
+  canvas crop instead.
 - The tablet is a Samsung Galaxy Tab A7 (SM-T500), Wi-Fi only, Android 12.
   USB tethering works despite being Wi-Fi only.
 - The Sony A6300's WiFi AP hardcodes `192.168.122.0/24`, which collides with

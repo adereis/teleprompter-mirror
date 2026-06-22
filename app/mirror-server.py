@@ -5,11 +5,14 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-import teleprompter_config
+# Shared config lives in ../lib; make it importable when run as a script.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import teleprompter_config  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent
 LAN_IPS = []

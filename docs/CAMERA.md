@@ -104,7 +104,7 @@ menu after changing modes.
 4. On the camera: MENU -> Application -> Application List -> Smart Remote
    Embedded
 5. `wlan0` auto-connects to the camera via the `Camera-A6300` NM profile
-6. Test: `./camera-control.py zoom`
+6. Test: `./camera/camera-control.py zoom` (from the repo root)
 
 Create the `Camera-A6300` NetworkManager profile (first time only):
 

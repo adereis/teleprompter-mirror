@@ -20,11 +20,11 @@ refocus) over WiFi while it feeds clean HDMI video.
 1. Connect the tablet via USB (data cable, not charge-only) with ADB debugging enabled
 2. Start the server with USB tethering:
    ```bash
-   ./start-mirror.sh usb
+   ./bin/start-mirror.sh usb
    ```
 3. Open the cast page — either from GNOME's app launcher ("Teleprompter Mirror") or:
    ```bash
-   ./open-cast.sh
+   ./bin/open-cast.sh
    ```
 4. On the tablet, open `http://localhost:8047/view` in Chrome
 
@@ -60,9 +60,9 @@ cp config.example.env ~/.config/teleprompter-mirror/config.env
 
 The same file is read by the bash scripts, the Python tools, and the systemd
 user service. Values resolve as **environment variable > config file > default**,
-so a one-off `TELEPROMPTER_PORT=9000 ./start-mirror.sh` still works. The config
+so a one-off `TELEPROMPTER_PORT=9000 ./bin/start-mirror.sh` still works. The config
 file lives outside the repo (`~/.config`), so machine-specific values never get
-committed. Re-run `sudo ./install.sh` after changing
+committed. Re-run `sudo ./system/install.sh` after changing
 `TELEPROMPTER_CAMERA_CONNECTION`, since that value is baked into the installed
 NetworkManager dispatcher.
 
@@ -71,7 +71,7 @@ NetworkManager dispatcher.
 USB tethering provides lower latency (~90ms) and a secure direct link.
 Use a **data-capable USB cable** — charge-only cables silently fail.
 
-`start-mirror.sh usb` handles everything: tethering, routing, firewall, ADB reverse,
+`bin/start-mirror.sh usb` handles everything: tethering, routing, firewall, ADB reverse,
 and server startup. If the ADB USB function switch doesn't work (common on Samsung),
 the script opens the tethering settings on the tablet for manual toggle.
 
@@ -81,12 +81,12 @@ If the tablet is connected through a USB KVM switch, switching away and back res
 the USB tethering. Install the system hooks to automate recovery:
 
 ```bash
-sudo ./install.sh
+sudo ./system/install.sh
 ```
 
 After a KVM switch: accept the USB debugging prompt on the tablet → tethering settings
 open automatically → tap the USB tethering toggle → routing/firewall/ADB reverse are
-configured automatically. Or manually: `./start-mirror.sh reconnect`.
+configured automatically. Or manually: `./bin/start-mirror.sh reconnect`.
 
 <details>
 <summary>Manual USB tethering setup</summary>
@@ -103,7 +103,7 @@ configured automatically. Or manually: `./start-mirror.sh reconnect`.
    sudo firewall-cmd --zone=trusted --change-interface=usb0
    ```
 5. Set up ADB reverse: `adb reverse tcp:8047 tcp:8047`
-6. Start the server: `./mirror-server.py`
+6. Start the server: `./app/mirror-server.py`
 7. On the tablet, open `http://localhost:8047/view`
 
 </details>
@@ -115,14 +115,14 @@ while HDMI capture stays active. A dedicated USB WiFi adapter connects to the
 camera's WiFi AP, leaving the main WiFi free for internet.
 
 ```bash
-./camera-control.py zoom in        # zoom in one step
-./camera-control.py zoom out 2s    # smooth zoom out for 2 seconds
-./camera-control.py zoom set       # go to default framing position
-./camera-control.py refocus        # nudge zoom to trigger AF-C refocus
-./camera-control.py zoom           # show current zoom position
+./camera/camera-control.py zoom in     # zoom in one step
+./camera/camera-control.py zoom out 2s # smooth zoom out for 2 seconds
+./camera/camera-control.py zoom set    # go to default framing position
+./camera/camera-control.py refocus     # nudge zoom to trigger AF-C refocus
+./camera/camera-control.py zoom        # show current zoom position
 ```
 
-See [CAMERA.md](CAMERA.md) for setup instructions, API details, and
+See [docs/CAMERA.md](docs/CAMERA.md) for setup instructions, API details, and
 troubleshooting.
 
 ## How it works
@@ -152,6 +152,21 @@ The cast page is configured for video call mirroring:
 - Chrome or Chromium on both laptop and tablet
 - `adb` — for USB tethering setup and ADB reverse port forwarding
 - USB WiFi adapter (MT7601U or similar) — for camera control (optional)
+
+## Repository layout
+
+```
+app/        WebRTC cast web app + signaling server (mirror-server.py, *.html, assets)
+camera/     Sony A6300 control over the Camera Remote API (camera-control.py)
+lib/        shared config loaded by both the scripts and the Python tools
+bin/        user-facing launchers (start-mirror.sh, open-cast.sh)
+system/     OS integration installed by system/install.sh:
+              udev/           USB device-detection rules
+              systemd/        services
+              networkmanager/ dispatcher hooks
+docs/        supplementary docs (CAMERA.md)
+tests/       stdlib unit tests (run with ./run-tests.sh)
+```
 
 ## Forking and adapting
 

@@ -9,8 +9,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=lib/config.sh
-. "$SCRIPT_DIR/lib/config.sh"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=../lib/config.sh
+. "$PROJECT_DIR/lib/config.sh"
 PORT="$TELEPROMPTER_PORT"
 
 setup_usb() {
@@ -84,7 +85,7 @@ case "${1:-}" in
         setup_usb
         echo ""
         echo "Starting mirror server on port $PORT..."
-        exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
+        exec python3 "$PROJECT_DIR/app/mirror-server.py" -p "$PORT"
         ;;
     reconnect)
         setup_usb
@@ -93,6 +94,6 @@ case "${1:-}" in
         ;;
     *)
         echo "Starting mirror server on port $PORT..."
-        exec python3 "$SCRIPT_DIR/mirror-server.py" -p "$PORT"
+        exec python3 "$PROJECT_DIR/app/mirror-server.py" -p "$PORT"
         ;;
 esac

@@ -26,8 +26,11 @@ import sys
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
-import teleprompter_config
+# Shared config lives in ../lib; make it importable when run as a script.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import teleprompter_config  # noqa: E402
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
