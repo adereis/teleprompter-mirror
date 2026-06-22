@@ -1,7 +1,19 @@
 # Teleprompter Mirror
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Mirror a laptop window to a tablet placed near the camera, designed for
 eye contact during video calls.
+
+Look at the tablet (right under your webcam) instead of at the meeting window,
+and you appear to make eye contact. The laptop captures a window over WebRTC and
+streams it to a tablet over a low-latency USB link; the tablet shows it
+mirrored, like a teleprompter. Optional extras control a Sony A6300 camera (zoom,
+refocus) over WiFi while it feeds clean HDMI video.
+
+> **This is a personal project, shared to be forked.** It solves my specific
+> setup and I don't maintain it as a general-purpose tool or take contributions.
+> If it's useful, [fork it and make it your own](#forking-and-adapting).
 
 ## Quick start
 
@@ -140,6 +152,36 @@ The cast page is configured for video call mirroring:
 - Chrome or Chromium on both laptop and tablet
 - `adb` — for USB tethering setup and ADB reverse port forwarding
 - USB WiFi adapter (MT7601U or similar) — for camera control (optional)
+
+## Forking and adapting
+
+This project is built around one specific setup — a Samsung Galaxy Tab, a Sony
+A6300, an MT7601U WiFi adapter, Fedora/GNOME — and it's deliberately small. I'm
+not growing it into a general-purpose tool or maintaining it for others, so
+there's no issue tracker and no contribution process. The intended workflow is:
+**fork it, and drive your own version.**
+
+It's designed to make that easy:
+
+- **Machine-specific values live in config, not code** — see
+  [Configuration](#configuration). Your fork shouldn't need source edits just to
+  change a port, browser, or camera profile.
+- **The architecture, hardware quirks, and gotchas are documented in
+  [`CLAUDE.md`](CLAUDE.md)** — point an AI coding assistant at it and adapting
+  the udev rules, dispatchers, and camera IDs to your own gear goes quickly.
+- **Keep your setup out of the source.** If you republish your fork, keep
+  usernames, hostnames, SSIDs, and passwords in `~/.config` and out of tracked
+  files (the existing `__PLACEHOLDER__` + `install.sh` pattern shows how).
+
+There's a small test suite to lean on while you change things (standard library
+only — nothing to install):
+
+```bash
+./run-tests.sh
+```
+
+It runs the Python unit tests, byte-compiles the tools, and lints the shell
+scripts with `shellcheck` when it's present.
 
 ## License
 

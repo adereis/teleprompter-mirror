@@ -132,6 +132,17 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   by GNOME 49's `object.register=false` on screencast PipeWire nodes. Kept for
   reference; see docstring for details.
 
+### Tests
+
+- `tests/` holds stdlib `unittest` tests (no pytest dependency). `run-tests.sh`
+  runs them plus `py_compile` and `shellcheck`. There's no CI — run it locally.
+- `mirror-server.py` and `camera-control.py` have hyphens, so they can't be
+  imported normally. `tests/loader.py` loads them by path via `importlib`, with
+  the repo root on `sys.path` so their `import teleprompter_config` resolves.
+- Network/hardware code is kept at arm's length from logic so the pure parts are
+  testable: `_fix_mdns` (SDP rewriting) and `parse_device_descriptor` (camera
+  SSDP XML) take strings and return values, with no I/O.
+
 ## Key gotchas
 
 - Chrome obfuscates local IPs in WebRTC candidates with mDNS UUIDs. The server
@@ -216,10 +227,11 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
 
 ### Network isolation
 
-- **Routing priority**: Ethernet (`Ethernet` profile) is the primary internet
-  uplink; WiFi (`optimusnet`) is the automatic fallback. Both must keep
+- **Routing priority**: the wired Ethernet profile is the primary internet
+  uplink; the home/office Wi-Fi profile is the automatic fallback. Both must keep
   `ipv4.never-default no` (the default). Tablet USB (`Wired connection N`) and
-  camera WiFi (`Camera-A6300`) are local-only — both use `never-default yes`
+  camera WiFi (the `TELEPROMPTER_CAMERA_CONNECTION` profile) are local-only —
+  both use `never-default yes`
   and must never carry a default route. NM auto-assigns metrics (~100 for
   ethernet, ~600 for WiFi) and adds +20,000 to WiFi when a wired default
   exists, so no explicit metrics are needed.

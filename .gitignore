@@ -1,4 +1,11 @@
+# Local dev environment
 .envrc
 .venv/
 __pycache__/
+*.pyc
 .claude/settings.local.json
+
+# Local machine config never belongs in the repo — it lives in
+# ~/.config/teleprompter-mirror/config.env. Guard against a stray copy here.
+/config.env
+config.env
