@@ -113,3 +113,12 @@ The cast page is configured for video call mirroring:
 - Chrome or Chromium on both laptop and tablet
 - `adb` — for USB tethering setup and ADB reverse port forwarding
 - USB WiFi adapter (MT7601U or similar) — for camera control (optional)
+
+## License
+
+[MIT](LICENSE) © Ademar Reis
+
+This is a personal project shared in the hope it's useful. It's built around
+specific hardware (a Samsung tablet, a Sony A6300, an MT7601U WiFi adapter), but
+the design keeps environment-specific values in configuration rather than code,
+so adapting it to your own setup is mostly a matter of editing one config file.
