@@ -28,13 +28,13 @@ find_device() {
     return 1
 }
 
-check_autosuspend() {
+fix_autosuspend() {
     local dev
     dev=$(find_device) || return
     local ctrl="$dev/power/control"
     if [ -e "$ctrl" ] && [ "$(cat "$ctrl")" != "on" ]; then
-        logger -p warning -t "$TAG" \
-            "WARNING: USB autosuspend is active on MT7601U ($dev) — camera WiFi will drop. Fix: ATTR{power/control}=\"on\" in udev rule"
+        echo "on" > "$ctrl"
+        logger -t "$TAG" "Disabled USB autosuspend on MT7601U ($dev)"
     fi
 }
 
@@ -42,7 +42,7 @@ sleep "$PROBE_WAIT"
 
 if ip link show wlan0 &>/dev/null; then
     logger -t "$TAG" "wlan0 present — no recovery needed"
-    check_autosuspend
+    fix_autosuspend
     exit 0
 fi
 
@@ -64,7 +64,7 @@ for attempt in $(seq 1 "$MAX_RETRIES"); do
 
     if ip link show wlan0 &>/dev/null; then
         logger -t "$TAG" "wlan0 recovered after re-probe (attempt $attempt)"
-        check_autosuspend
+        fix_autosuspend
         exit 0
     fi
 done
