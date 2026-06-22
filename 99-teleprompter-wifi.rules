@@ -1,4 +1,6 @@
 # Detect MT7601U WiFi adapter and ensure the driver binds.
 # After KVM switches or port changes, the mt7601u driver sometimes fails to
 # claim the device. The systemd service retries with a USB re-probe if needed.
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="148f", ATTR{idProduct}=="7601", TAG+="systemd", ENV{SYSTEMD_WANTS}="teleprompter-wifi-rebind.service"
+# Disable USB autosuspend — the 2s default causes the adapter to hardware-sleep,
+# dropping the camera's WiFi AP association.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="148f", ATTR{idProduct}=="7601", TAG+="systemd", ENV{SYSTEMD_WANTS}="teleprompter-wifi-rebind.service", ATTR{power/control}="on"
