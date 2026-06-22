@@ -12,7 +12,7 @@ Usage:
     camera-control.py zoom in start     # Continuous zoom in (send 'stop' to end)
     camera-control.py zoom stop         # Stop continuous zoom
     camera-control.py zoom in 3s        # Smooth zoom in for 3 seconds
-    camera-control.py zoom set [POS]    # Go to position (default: 32, teleprompter)
+    camera-control.py zoom set [SEC]    # Zoom out fully, then in for SEC (default: 0.9)
     camera-control.py refocus           # Nudge zoom in/out to trigger AF-C refocus
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
@@ -33,7 +33,7 @@ SSDP_ST = "urn:schemas-sony-com:service:ScalarWebAPI:1"
 SSDP_TIMEOUT = 3
 
 DEFAULT_ENDPOINT = "http://192.168.122.1:8080/sony"
-DEFAULT_ZOOM = 40
+DEFAULT_ZOOM_DURATION = 0.8
 
 log = logging.getLogger("camera-control")
 
@@ -174,8 +174,8 @@ def cmd_zoom(endpoint, direction, movement="1shot"):
     if direction == "stop":
         direction, movement = "in", "stop"
     if direction == "set":
-        target = int(movement) if movement != "1shot" else DEFAULT_ZOOM
-        cmd_zoom_set(endpoint, target)
+        duration = float(movement) if movement != "1shot" else DEFAULT_ZOOM_DURATION
+        cmd_zoom_set(endpoint, duration)
         return
     if movement.endswith("s"):
         duration = float(movement[:-1])
@@ -189,61 +189,32 @@ def cmd_zoom(endpoint, direction, movement="1shot"):
     print(f"Zoom {direction} {movement}: OK")
 
 
-def cmd_zoom_set(endpoint, target):
-    """Zoom to a target position (0-100).
+def zoom_timed(endpoint, direction, duration):
+    """Zoom in/out for a duration. Returns final position. Only 2 API calls."""
+    api_call(endpoint, "actZoom", [direction, "start"])
+    time.sleep(duration)
+    api_call(endpoint, "actZoom", [direction, "stop"])
+    time.sleep(0.3)
+    return get_zoom_position(endpoint)
 
-    Approaches from above to get consistent step positions — the lens
-    motor lands on different positions depending on zoom direction.
-    """
-    pos = get_zoom_position(endpoint)
-    if pos == target:
-        print(f"Already at {pos}/100")
-        return
-    # Overshoot above target, then step down for consistent positions
-    overshoot = min(target + 10, 100)
-    stalls = 0
-    if pos < target:
-        while pos < overshoot:
-            api_call(endpoint, "actZoom", ["in", "1shot"])
-            time.sleep(0.4)
-            new_pos = get_zoom_position(endpoint)
-            if new_pos == pos:
-                stalls += 1
-                if stalls >= 3:
-                    break
-                continue
-            stalls = 0
-            pos = new_pos
-    # Step down to target
-    stalls = 0
-    while pos > target:
-        api_call(endpoint, "actZoom", ["out", "1shot"])
-        time.sleep(0.4)
-        prev = pos
-        pos = get_zoom_position(endpoint)
-        if pos == prev:
-            stalls += 1
-            if stalls >= 3:
-                break
-            continue
-        stalls = 0
-        if pos <= target:
-            # Pick whichever side is closer
-            if abs(prev - target) < abs(pos - target):
-                api_call(endpoint, "actZoom", ["in", "1shot"])
-                time.sleep(0.4)
-                pos = get_zoom_position(endpoint)
-            break
+
+def cmd_zoom_set(endpoint, duration=None):
+    """Zoom out fully, then zoom in for DEFAULT_ZOOM_DURATION."""
+    if duration is None:
+        duration = DEFAULT_ZOOM_DURATION
+    zoom_timed(endpoint, "out", 10)
+    pos = zoom_timed(endpoint, "in", duration)
     print(f"Zoom set to {pos}/100")
 
 
 def cmd_refocus(endpoint):
-    """Nudge zoom to trigger AF-C refocus, then restore position."""
-    saved = get_zoom_position(endpoint)
+    """Nudge zoom to trigger AF-C refocus, then return."""
     api_call(endpoint, "actZoom", ["in", "1shot"])
     time.sleep(0.5)
-    cmd_zoom_set(endpoint, saved)
-    print("Refocus done.")
+    api_call(endpoint, "actZoom", ["out", "1shot"])
+    time.sleep(0.3)
+    pos = get_zoom_position(endpoint)
+    print(f"Refocus done, zoom at {pos}/100")
 
 
 def cmd_status(endpoint):
@@ -276,7 +247,8 @@ def cmd_reconnect(endpoint):
             for retry in range(3):
                 time.sleep(3)
                 try:
-                    cmd_zoom_set(endpoint, DEFAULT_ZOOM)
+                    pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
+                    print(f"Zoom set to {pos}/100")
                     return
                 except SystemExit:
                     if retry < 2:
