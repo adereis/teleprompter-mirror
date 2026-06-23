@@ -9,7 +9,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 PORT=${1:-$TELEPROMPTER_PORT}
 URL="http://localhost:$PORT/cast"
-WM_CLASS=teleprompter-mirror
 
 if ! curl -s -o /dev/null --connect-timeout 1 "$URL"; then
     MSG="Mirror server is not running on port $PORT.
@@ -24,4 +23,4 @@ Check status with:
     exit 1
 fi
 
-exec "$TELEPROMPTER_BROWSER" --app="$URL" --class="$WM_CLASS" 2>/dev/null
+exec "$TELEPROMPTER_BROWSER" --app="$URL" 2>/dev/null

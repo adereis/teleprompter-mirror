@@ -84,8 +84,12 @@ Keep the three in sync.
 - `latency-test.html` — Visual latency measurement. Displays a millisecond clock
   that can be shared to the tablet; photograph both screens to measure delay.
 - `open-cast.sh` — Opens `/cast` in Chrome's `--app` mode (standalone window,
-  separate taskbar entry, keeps Chrome Tab capture in getDisplayMedia). Shows a
-  zenity error dialog if the server isn't running.
+  no browser chrome, keeps Chrome Tab capture in getDisplayMedia). Does NOT use
+  `--class` — on Wayland, that flag sets the app_id process-wide, so if the cast
+  window starts Chrome first (e.g. after reboot), all Chrome windows inherit the
+  teleprompter icon. Without `--class`, the cast window groups with Chrome in the
+  taskbar, which is the correct behavior for tab capture to work. Shows a zenity
+  error dialog if the server isn't running.
 - `start-mirror.sh` — One-command USB tethering + server startup. Supports
   `usb` (full setup), `reconnect` (re-enable USB without restarting server),
   and no-argument (server only) modes.
