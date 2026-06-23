@@ -118,10 +118,12 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   (logs disconnection), and `dhcp4-change` (logs WiFi station metrics from
   `iw` for retrospective analysis). On `dhcp4-change`, checks kernel log
   for a recent disassociation event — if found, this DHCP change follows a
-  WiFi re-association (e.g. after an inactivity kick) and reconnect runs to
-  recover Smart Remote. Routine DHCP renewals (~every 27 min) only log, no
-  camera API calls. Uses `CONNECTION_ID` env var to identify the connection.
-  No keepalive or periodic polling of any kind.
+  WiFi re-association (e.g. after an inactivity kick) and runs
+  `camera-control.py start`, which checks camera status via `getEvent` and
+  only calls `startRecMode` if the camera is in NotReady (brief WiFi blips
+  may not reset Smart Remote). Routine DHCP renewals (~every 27 min) only
+  log, no camera API calls. Uses `CONNECTION_ID` env var to identify the
+  connection. No keepalive or periodic polling of any kind.
 - `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
   (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
   switches or port changes, the `mt7601u` driver sometimes fails to claim the
@@ -223,10 +225,13 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   1–2 hours, then the connection stabilizes for days. Hypothesis: NM does
   aggressive background scanning on a fresh boot, taking wlan0 off-channel
   and making the adapter miss the AP's keepalive probes. As NM reduces scan
-  frequency, the disconnects stop. Not yet confirmed — needs testing with
+  frequency, the disconnects stop. BSSID locking (`TELEPROMPTER_CAMERA_BSSID`)
+  disables NM background scanning on the camera adapter, which significantly
+  reduces Reason 4 events. Not yet fully confirmed — needs testing with
   `iw event` capture across a reboot cycle. The `dhcp4-change` dispatcher
-  handler catches these silent re-associations and runs `startRecMode` to
-  recover Smart Remote without changing zoom (camera state survives the blip).
+  handler catches these silent re-associations and runs `camera-control.py
+  start`, which checks camera status via `getEvent` and only calls
+  `startRecMode` if the camera actually reset to NotReady.
 - The MT7601U's `iw station dump` reports `beacon_loss=88` as a fixed value
   regardless of actual conditions — likely a driver reporting bug. Do not rely
   on this field for diagnostics.
