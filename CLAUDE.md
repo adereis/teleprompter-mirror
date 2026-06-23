@@ -107,13 +107,14 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   tethering). The driver check prevents poisoning Thunderbolt dock ethernet,
   which also auto-creates as `"Wired connection N"` before being renamed.
 - `99-teleprompter-camera` — NetworkManager dispatcher. Acts on `up` (runs
-  `camera-control.py reconnect` to re-initialize Smart Remote) and `down`
-  (logs disconnection for retrospective analysis). Uses `CONNECTION_ID` env
-  var to identify the connection, which works for both `up` and `down` events.
-  Does NOT act on `dhcp4-change` — the A6300's DHCP lease is 1 hour (renewal
-  every ~27 min), and each renewal would hit the camera API; accumulated HTTP
-  requests crash the WiFi AP even at low frequency. No keepalive or periodic
-  polling of any kind.
+  `camera-control.py reconnect` to re-initialize Smart Remote), `down`
+  (logs disconnection), and `dhcp4-change` (logs WiFi station metrics from
+  `iw` for retrospective analysis). On `dhcp4-change`, checks kernel log
+  for a recent disassociation event — if found, this DHCP change follows a
+  WiFi re-association (e.g. after an inactivity kick) and reconnect runs to
+  recover Smart Remote. Routine DHCP renewals (~every 27 min) only log, no
+  camera API calls. Uses `CONNECTION_ID` env var to identify the connection.
+  No keepalive or periodic polling of any kind.
 - `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
   (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
   switches or port changes, the `mt7601u` driver sometimes fails to claim the
@@ -209,6 +210,19 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   zero disassociations over 92 hours. Do not poll the Camera Remote API unless
   the user explicitly triggered a command. The NM dispatcher handles recovery
   from any WiFi drops without needing periodic polling.
+- The A6300's WiFi AP also disassociates idle clients (802.11 Reason 4:
+  DISASSOC_DUE_TO_INACTIVITY). This is more frequent after laptop reboots —
+  observed as clusters of exactly 10-minute-interval kicks that taper off over
+  1–2 hours, then the connection stabilizes for days. Hypothesis: NM does
+  aggressive background scanning on a fresh boot, taking wlan0 off-channel
+  and making the adapter miss the AP's keepalive probes. As NM reduces scan
+  frequency, the disconnects stop. Not yet confirmed — needs testing with
+  `iw event` capture across a reboot cycle. The `dhcp4-change` dispatcher
+  handler catches these silent re-associations and runs `startRecMode` to
+  recover Smart Remote without changing zoom (camera state survives the blip).
+- The MT7601U's `iw station dump` reports `beacon_loss=88` as a fixed value
+  regardless of actual conditions — likely a driver reporting bug. Do not rely
+  on this field for diagnostics.
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
