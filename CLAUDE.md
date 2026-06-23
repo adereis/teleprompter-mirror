@@ -50,8 +50,11 @@ built-in default**.
   systemd-managed server honors the same config.
 - `install.sh` bakes `TELEPROMPTER_CAMERA_CONNECTION` into the NM camera
   dispatcher (`__CAMERA_CONNECTION__` placeholder) because dispatchers run as
-  root and can't read the user's config at runtime. Re-run `install.sh` after
-  changing that value.
+  root and can't read the user's config at runtime. It also applies
+  `TELEPROMPTER_CAMERA_BSSID` to the NM connection profile (BSSID lock) if
+  set — this tells NM the camera is a single AP, disabling background
+  scanning that takes the adapter off-channel and causes inactivity kicks.
+  Re-run `install.sh` after changing either value.
 
 When adding a new tunable: add it to `DEFAULTS` in `lib/teleprompter_config.py`,
 the defaults block + export list in `lib/config.sh`, and `config.example.env`.

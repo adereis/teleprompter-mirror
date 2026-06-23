@@ -27,6 +27,7 @@ read_config() {
     echo "${val:-$default}"
 }
 CAMERA_CONNECTION="$(read_config TELEPROMPTER_CAMERA_CONNECTION Camera-A6300)"
+CAMERA_BSSID="$(read_config TELEPROMPTER_CAMERA_BSSID "")"
 echo "Camera WiFi connection: $CAMERA_CONNECTION"
 
 echo "Installing udev rules..."
@@ -52,6 +53,13 @@ sed -e "s/__USER__/$TARGET_USER/g" -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
     "$SCRIPT_DIR/networkmanager/99-teleprompter-camera" \
     > /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 chmod +x /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
+
+if [ -n "$CAMERA_BSSID" ]; then
+    echo "Locking camera WiFi to BSSID: $CAMERA_BSSID"
+    nmcli connection modify "$CAMERA_CONNECTION" 802-11-wireless.bssid "$CAMERA_BSSID"
+else
+    echo "No TELEPROMPTER_CAMERA_BSSID set — NM background scanning remains enabled"
+fi
 
 echo "Installing desktop entry..."
 DESKTOP_DIR="$TARGET_HOME/.local/share/applications"
