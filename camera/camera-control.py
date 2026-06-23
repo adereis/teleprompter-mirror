@@ -279,13 +279,18 @@ def cmd_reconnect(endpoint):
 
 
 def cmd_start(endpoint):
-    """Start rec mode without changing zoom. For WiFi re-association recovery."""
-    result = api_call(endpoint, "startRecMode", exit_on_error=False)
-    if result is not None:
-        print("Rec mode started.")
-    else:
+    """Check camera state; start rec mode only if needed. No zoom change."""
+    result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
+    if result is None:
         print("Camera not reachable.")
         sys.exit(1)
+    status = result[1].get("cameraStatus") if isinstance(result[1], dict) else None
+    if status == "NotReady":
+        print(f"Camera status: {status} — recovering")
+        api_call(endpoint, "startRecMode", exit_on_error=False)
+        print("Rec mode started.")
+    else:
+        print(f"Camera status: {status} — no recovery needed")
 
 
 def cmd_apis(endpoint):
