@@ -1,24 +1,67 @@
 #!/bin/bash
 # NetworkManager dispatcher script for camera WiFi.
-# Logs connection state changes for retrospective analysis.
-# Only runs camera-control.py on `up` — never on dhcp4-change or other
-# events, because the A6300's WiFi AP crashes under accumulated HTTP
-# requests (even at low frequency).
+#
+# Events:
+#   up           — WiFi connected: initialize Smart Remote (startRecMode + zoom)
+#   down         — WiFi lost: log for retrospective analysis
+#   dhcp4-change — DHCP lease changed: log WiFi station metrics; if this
+#                  follows a re-association (not a routine renewal), recover
+#                  Smart Remote. Detection: kernel logs a "disassociated"
+#                  event during re-associations but not during renewals.
+#
+# No keepalive or periodic polling — the camera's WiFi AP crashes under
+# accumulated HTTP requests. Camera API is only called when WiFi already
+# dropped and needs reinitialization.
 
 IFACE="$1"
 ACTION="$2"
 
-# CONNECTION_ID is set by NM for all dispatcher actions (works on down too,
-# unlike nmcli --active which can't see a deactivated connection).
 [ "$CONNECTION_ID" = "__CAMERA_CONNECTION__" ] || exit 0
+
+log() { logger -t teleprompter-camera "$@"; }
+
+log_wifi_metrics() {
+    local dump
+    dump=$(iw dev "$IFACE" station dump 2>/dev/null) || return
+    local inactive signal rx_bytes tx_bytes tx_retries tx_failed beacon_loss
+    inactive=$(echo "$dump" | awk '/inactive time:/{print $3}')
+    signal=$(echo "$dump" | awk '/signal:/{print $2; exit}')
+    rx_bytes=$(echo "$dump" | awk '/rx bytes:/{print $3}')
+    tx_bytes=$(echo "$dump" | awk '/tx bytes:/{print $3}')
+    tx_retries=$(echo "$dump" | awk '/tx retries:/{print $3}')
+    tx_failed=$(echo "$dump" | awk '/tx failed:/{print $3}')
+    beacon_loss=$(echo "$dump" | awk '/beacon loss:/{print $3}')
+    log "$IFACE: inactive=${inactive}ms signal=${signal}dBm rx=${rx_bytes}B tx=${tx_bytes}B retries=${tx_retries} failed=${tx_failed} beacon_loss=${beacon_loss}"
+}
+
+run_reconnect() {
+    runuser -u __USER__ -- __PROJECT_DIR__/camera/camera-control.py reconnect 2>&1 \
+        | logger -t teleprompter-camera &
+}
+
+run_start() {
+    runuser -u __USER__ -- __PROJECT_DIR__/camera/camera-control.py start 2>&1 \
+        | logger -t teleprompter-camera &
+}
 
 case "$ACTION" in
     up)
-        logger -t teleprompter-camera "Camera WiFi connected on $IFACE — initializing"
-        runuser -u __USER__ -- __PROJECT_DIR__/camera/camera-control.py reconnect 2>&1 \
-            | logger -t teleprompter-camera &
+        log "Camera WiFi connected on $IFACE — initializing"
+        log_wifi_metrics
+        run_reconnect
         ;;
     down)
-        logger -t teleprompter-camera "Camera WiFi disconnected on $IFACE"
+        log "Camera WiFi disconnected on $IFACE"
+        ;;
+    dhcp4-change)
+        if journalctl -k --since='-2min' --no-pager 2>/dev/null \
+            | grep -q "$IFACE:.*disassociated"; then
+            log "WiFi re-association on $IFACE — recovering Smart Remote"
+            log_wifi_metrics
+            run_start
+        else
+            log "DHCP renewal on $IFACE (routine)"
+            log_wifi_metrics
+        fi
         ;;
 esac

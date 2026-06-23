@@ -17,6 +17,7 @@ Usage:
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
+    camera-control.py start             # Just startRecMode (no zoom change)
 """
 
 import json
@@ -277,6 +278,16 @@ def cmd_reconnect(endpoint):
 
 
 
+def cmd_start(endpoint):
+    """Start rec mode without changing zoom. For WiFi re-association recovery."""
+    result = api_call(endpoint, "startRecMode", exit_on_error=False)
+    if result is not None:
+        print("Rec mode started.")
+    else:
+        print("Camera not reachable.")
+        sys.exit(1)
+
+
 def cmd_apis(endpoint):
     """List all available API methods."""
     result = api_call(endpoint, "getAvailableApiList")
@@ -310,6 +321,8 @@ def main():
         cmd_status(endpoint)
     elif cmd == "reconnect":
         cmd_reconnect(endpoint)
+    elif cmd == "start":
+        cmd_start(endpoint)
     elif cmd == "apis":
         cmd_apis(endpoint)
     else:
