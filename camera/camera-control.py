@@ -41,7 +41,7 @@ SSDP_TIMEOUT = 3
 # Endpoint comes from config (env or ~/.config/teleprompter-mirror/config.env),
 # falling back to the A6300's fixed soft-AP address.
 DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
-DEFAULT_ZOOM_DURATION = 0.8
+DEFAULT_ZOOM_DURATION = 1.2
 
 log = logging.getLogger("camera-control")
 
@@ -257,13 +257,28 @@ def cmd_status(endpoint):
 ZOOM_RETRY_DELAYS = [3, 5, 8, 13, 21]
 
 
+def zoom_to_zero(endpoint):
+    """Zoom out to 0. Returns True on success."""
+    zoom_timed(endpoint, "out", 2)
+    pos = get_zoom_position(endpoint)
+    if pos > 0:
+        print(f"Zoom still at {pos}/100 after 2s out, extending")
+        zoom_timed(endpoint, "out", 3)
+        pos = get_zoom_position(endpoint)
+    if pos > 0:
+        print(f"Zoom still at {pos}/100 — could not reach 0")
+        return False
+    return True
+
+
 def restore_zoom(endpoint):
-    """Restore zoom with fibonacci-style backoff. Returns True on success."""
+    """Reset zoom to default with fibonacci-style backoff. Returns True on success."""
     elapsed = 0
     for i, delay in enumerate(ZOOM_RETRY_DELAYS):
         time.sleep(delay)
         elapsed += delay
         try:
+            zoom_to_zero(endpoint)
             pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
             print(f"Zoom restored to {pos}/100 (attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s)")
             return True
