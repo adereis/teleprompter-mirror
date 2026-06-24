@@ -6,8 +6,7 @@
 #   down         — WiFi lost: log for retrospective analysis
 #   dhcp4-change — DHCP lease changed: log WiFi station metrics; if this
 #                  follows a re-association (not a routine renewal), recover
-#                  Smart Remote. Detection: kernel logs a "disassociated"
-#                  event during re-associations but not during renewals.
+#                  Smart Remote. Skips recovery if `up` already handled it.
 #
 # No keepalive or periodic polling — the camera's WiFi AP crashes under
 # accumulated HTTP requests. Camera API is only called when WiFi already
@@ -17,6 +16,8 @@ IFACE="$1"
 ACTION="$2"
 
 [ "$CONNECTION_ID" = "__CAMERA_CONNECTION__" ] || exit 0
+
+LOCK="/run/teleprompter-camera-up"
 
 log() { logger -t teleprompter-camera "$@"; }
 
@@ -48,13 +49,19 @@ case "$ACTION" in
     up)
         log "Camera WiFi connected on $IFACE — initializing"
         log_wifi_metrics
+        touch "$LOCK"
         run_reconnect
         ;;
     down)
         log "Camera WiFi disconnected on $IFACE"
+        rm -f "$LOCK"
         ;;
     dhcp4-change)
-        if journalctl -k --since='-2min' --no-pager 2>/dev/null \
+        if [ -f "$LOCK" ]; then
+            log "DHCP after up on $IFACE — skipping (up handler already recovering)"
+            log_wifi_metrics
+            rm -f "$LOCK"
+        elif journalctl -k --since='-2min' --no-pager 2>/dev/null \
             | grep -q "$IFACE:.*disassociated"; then
             log "WiFi re-association on $IFACE — recovering Smart Remote"
             log_wifi_metrics
