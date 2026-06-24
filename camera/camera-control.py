@@ -285,12 +285,24 @@ def cmd_start(endpoint):
         print("Camera not reachable.")
         sys.exit(1)
     status = result[1].get("cameraStatus") if isinstance(result[1], dict) else None
+    zoom = None
+    for item in result:
+        if isinstance(item, dict) and item.get("type") == "zoomInformation":
+            zoom = item["zoomPosition"]
+            break
     if status == "NotReady":
-        print(f"Camera status: {status} — recovering")
         api_call(endpoint, "startRecMode", exit_on_error=False)
-        print("Rec mode started.")
+        time.sleep(3)
+        zoom = get_zoom_position(endpoint)
+        if zoom is not None and zoom <= 0:
+            print(f"Camera was NotReady (zoom: {zoom}) — restoring zoom")
+            pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
+            print(f"Zoom set to {pos}/100")
+        else:
+            print(f"Camera was NotReady — recovered (zoom: {zoom})")
     else:
-        print(f"Camera status: {status} — no recovery needed")
+        print(f"Camera status: {status} (zoom: {zoom})"
+              " — no recovery needed")
 
 
 def cmd_apis(endpoint):
