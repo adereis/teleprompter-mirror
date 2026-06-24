@@ -54,6 +54,9 @@ sed -e "s/__USER__/$TARGET_USER/g" -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
     > /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 chmod +x /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 
+echo "Disabling WiFi power save on camera connection"
+nmcli connection modify "$CAMERA_CONNECTION" 802-11-wireless.powersave 2
+
 if [ -n "$CAMERA_BSSID" ]; then
     echo "Locking camera WiFi to BSSID: $CAMERA_BSSID"
     nmcli connection modify "$CAMERA_CONNECTION" 802-11-wireless.bssid "$CAMERA_BSSID"
