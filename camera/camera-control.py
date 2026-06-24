@@ -254,6 +254,25 @@ def cmd_status(endpoint):
                         print(f"{t}: {json.dumps(sub, indent=2)}")
 
 
+ZOOM_RETRY_DELAYS = [3, 5, 8, 13, 21]
+
+
+def restore_zoom(endpoint):
+    """Restore zoom with fibonacci-style backoff. Returns True on success."""
+    elapsed = 0
+    for i, delay in enumerate(ZOOM_RETRY_DELAYS):
+        time.sleep(delay)
+        elapsed += delay
+        try:
+            pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
+            print(f"Zoom restored to {pos}/100 (attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s)")
+            return True
+        except SystemExit:
+            print(f"Zoom not ready (attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s)")
+    print(f"Zoom restore failed after {len(ZOOM_RETRY_DELAYS)} attempts ({elapsed}s)")
+    return False
+
+
 def cmd_reconnect(endpoint):
     """Wait for camera after WiFi reconnect, start rec mode, restore zoom."""
     max_wait = 30
@@ -261,16 +280,7 @@ def cmd_reconnect(endpoint):
         result = api_call(endpoint, "startRecMode", exit_on_error=False)
         if result is not None:
             print("Camera connected, rec mode started.")
-            for retry in range(3):
-                time.sleep(3)
-                try:
-                    pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
-                    print(f"Zoom set to {pos}/100")
-                    return
-                except SystemExit:
-                    if retry < 2:
-                        print(f"Zoom not ready, retrying ({retry + 2}/3)...")
-            print("Zoom restore failed after 3 attempts")
+            restore_zoom(endpoint)
             return
         time.sleep(2)
     print(f"Camera not reachable after {max_wait}s")
@@ -292,16 +302,8 @@ def cmd_start(endpoint):
             break
     if status == "NotReady":
         api_call(endpoint, "startRecMode", exit_on_error=False)
-        for retry in range(3):
-            time.sleep(3)
-            try:
-                pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
-                print(f"Camera was NotReady — recovered, zoom set to {pos}/100")
-                return
-            except SystemExit:
-                if retry < 2:
-                    print(f"Zoom not ready, retrying ({retry + 2}/3)...")
-        print("Camera was NotReady — recovered, zoom restore failed")
+        print("Camera was NotReady — recovering")
+        restore_zoom(endpoint)
     else:
         print(f"Camera status: {status} (zoom: {zoom})"
               " — no recovery needed")
