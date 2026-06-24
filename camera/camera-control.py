@@ -292,14 +292,16 @@ def cmd_start(endpoint):
             break
     if status == "NotReady":
         api_call(endpoint, "startRecMode", exit_on_error=False)
-        time.sleep(3)
-        zoom = get_zoom_position(endpoint)
-        if zoom is not None and zoom <= 0:
-            print(f"Camera was NotReady (zoom: {zoom}) — restoring zoom")
-            pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
-            print(f"Zoom set to {pos}/100")
-        else:
-            print(f"Camera was NotReady — recovered (zoom: {zoom})")
+        for retry in range(3):
+            time.sleep(3)
+            try:
+                pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
+                print(f"Camera was NotReady — recovered, zoom set to {pos}/100")
+                return
+            except SystemExit:
+                if retry < 2:
+                    print(f"Zoom not ready, retrying ({retry + 2}/3)...")
+        print("Camera was NotReady — recovered, zoom restore failed")
     else:
         print(f"Camera status: {status} (zoom: {zoom})"
               " — no recovery needed")
