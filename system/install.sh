@@ -32,12 +32,15 @@ echo "Camera WiFi connection: $CAMERA_CONNECTION"
 
 echo "Installing udev rules..."
 cp "$SCRIPT_DIR/udev/99-teleprompter-tablet.rules" /etc/udev/rules.d/
+cp "$SCRIPT_DIR/udev/99-teleprompter-tether.rules" /etc/udev/rules.d/
 cp "$SCRIPT_DIR/udev/99-teleprompter-wifi.rules" /etc/udev/rules.d/
 udevadm control --reload-rules
 
 echo "Installing systemd services..."
 sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/systemd/teleprompter-tether-prompt.service" \
     > /etc/systemd/system/teleprompter-tether-prompt.service
+sed "s/__USER__/$TARGET_USER/g" "$SCRIPT_DIR/systemd/teleprompter-adb-reverse.service" \
+    > /etc/systemd/system/teleprompter-adb-reverse.service
 cp "$SCRIPT_DIR/systemd/teleprompter-wifi-rebind.service" \
     /etc/systemd/system/teleprompter-wifi-rebind.service
 install -Dm755 "$SCRIPT_DIR/wifi-rebind.sh" /usr/local/libexec/teleprompter-wifi-rebind.sh
@@ -87,8 +90,10 @@ runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
 echo ""
 echo "Installed:"
 echo "  udev:    /etc/udev/rules.d/99-teleprompter-tablet.rules"
+echo "  udev:    /etc/udev/rules.d/99-teleprompter-tether.rules"
 echo "  udev:    /etc/udev/rules.d/99-teleprompter-wifi.rules"
 echo "  systemd: /etc/systemd/system/teleprompter-tether-prompt.service"
+echo "  systemd: /etc/systemd/system/teleprompter-adb-reverse.service"
 echo "  systemd: /etc/systemd/system/teleprompter-wifi-rebind.service"
 echo "  script:  /usr/local/libexec/teleprompter-wifi-rebind.sh"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter"

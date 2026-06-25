@@ -1,0 +1,6 @@
+# Detect Samsung tablet in tethering+ADB mode and restore ADB reverse forwarding.
+# After laptop suspend/resume or KVM switch, ADB reverse state is lost but the
+# tablet stays in tethering mode (6864). The NM dispatcher only fires on usb0 "up"
+# which may not re-trigger if the interface survived the reconnect.
+# Samsung USB IDs: 04e8:6860 (MTP), 04e8:6864 (tethering).
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="6864", TAG+="systemd", ENV{SYSTEMD_WANTS}="teleprompter-adb-reverse.service"

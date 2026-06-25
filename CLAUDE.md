@@ -20,7 +20,8 @@ camera/     camera-control.py
 lib/        config.sh, teleprompter_config.py        (shared config)
 bin/        start-mirror.sh, open-cast.sh            (user launchers)
 system/     install.sh, uninstall.sh, *.desktop, wifi-rebind.sh
-            udev/ *.rules · systemd/ *.service · networkmanager/ 99-teleprompter[-camera]
+            udev/ *.rules · systemd/ *.service
+            networkmanager/ 99-teleprompter[-camera]
 docs/       CAMERA.md
 tests/      loader.py, test_*.py
 .githooks/  pre-commit                               (secret-leak guard)
@@ -124,6 +125,15 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   may not reset Smart Remote). Routine DHCP renewals (~every 27 min) only
   log, no camera API calls. Uses `CONNECTION_ID` env var to identify the
   connection. No keepalive or periodic polling of any kind.
+- `99-teleprompter-tether.rules` — udev rule. Detects the Samsung tablet connecting
+  in tethering+ADB mode (`04e8:6864`) and triggers `teleprompter-adb-reverse.service`.
+  Covers the case where the laptop disconnects and reconnects (suspend/resume, KVM
+  switch, dock) while the tablet stays in tethering mode — `usb0` may not fully
+  cycle down/up so the NM dispatcher doesn't fire, but ADB reverse state is lost.
+  Complements the NM dispatcher's `adb reverse` (which handles fresh tethering).
+- `teleprompter-adb-reverse.service` — systemd one-shot service triggered by the
+  tethering udev rule. Waits for ADB readiness (`adb wait-for-device`) then
+  re-establishes `adb reverse tcp:8047 tcp:8047`.
 - `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
   (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
   switches or port changes, the `mt7601u` driver sometimes fails to claim the

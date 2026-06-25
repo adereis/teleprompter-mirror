@@ -1,0 +1,8 @@
+[Unit]
+Description=Restore ADB reverse port forwarding for Teleprompter Mirror
+
+[Service]
+Type=oneshot
+User=__USER__
+ExecStartPre=/usr/bin/adb wait-for-device
+ExecStart=/usr/bin/adb reverse tcp:8047 tcp:8047
