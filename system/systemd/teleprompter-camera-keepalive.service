@@ -1,5 +1,5 @@
 [Unit]
-Description=Camera WiFi keepalive (getEvent every 160s)
+Description=Camera WiFi keepalive (getEvent poll)
 
 [Service]
 Type=exec

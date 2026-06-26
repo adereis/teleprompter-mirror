@@ -59,6 +59,7 @@ case "$ACTION" in
         log "Camera WiFi connected on $IFACE — initializing"
         log_wifi_metrics
         touch "$LOCK"
+        { sleep 30; rm -f "$LOCK"; } &
         run_reconnect
         keepalive_start
         ;;

@@ -43,7 +43,7 @@ SSDP_TIMEOUT = 3
 # falling back to the A6300's fixed soft-AP address.
 DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
 DEFAULT_ZOOM_DURATION = 1.2
-KEEPALIVE_INTERVAL = 160
+KEEPALIVE_INTERVAL = 10
 
 log = logging.getLogger("camera-control")
 
