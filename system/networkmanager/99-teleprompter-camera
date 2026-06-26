@@ -2,15 +2,11 @@
 # NetworkManager dispatcher script for camera WiFi.
 #
 # Events:
-#   up           — WiFi connected: initialize Smart Remote (startRecMode + zoom)
-#   down         — WiFi lost: log for retrospective analysis
+#   up           — WiFi connected: initialize Smart Remote, start keepalive
+#   down         — WiFi lost: stop keepalive, log for retrospective analysis
 #   dhcp4-change — DHCP lease changed: log WiFi station metrics; if this
 #                  follows a re-association (not a routine renewal), recover
 #                  Smart Remote. Skips recovery if `up` already handled it.
-#
-# No keepalive or periodic polling — the camera's WiFi AP crashes under
-# accumulated HTTP requests. Camera API is only called when WiFi already
-# dropped and needs reinitialization.
 
 IFACE="$1"
 ACTION="$2"
@@ -18,6 +14,7 @@ ACTION="$2"
 [ "$CONNECTION_ID" = "__CAMERA_CONNECTION__" ] || exit 0
 
 LOCK="/run/teleprompter-camera-up"
+XDG_DIR="/run/user/$(id -u __USER__)"
 
 log() { logger -t teleprompter-camera "$@"; }
 
@@ -45,16 +42,30 @@ run_start() {
         | logger -t teleprompter-camera &
 }
 
+keepalive_start() {
+    runuser -u __USER__ -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+        systemctl --user start teleprompter-camera-keepalive.service 2>/dev/null \
+        && log "Keepalive started" \
+        || log "Keepalive failed to start"
+}
+
+keepalive_stop() {
+    runuser -u __USER__ -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+        systemctl --user stop teleprompter-camera-keepalive.service 2>/dev/null || true
+}
+
 case "$ACTION" in
     up)
         log "Camera WiFi connected on $IFACE — initializing"
         log_wifi_metrics
         touch "$LOCK"
         run_reconnect
+        keepalive_start
         ;;
     down)
         log "Camera WiFi disconnected on $IFACE"
         rm -f "$LOCK"
+        keepalive_stop
         ;;
     dhcp4-change)
         if [ -f "$LOCK" ]; then

@@ -75,12 +75,15 @@ sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$SCRIPT_DIR/teleprompter-mirror.desktop"
 chown "$TARGET_USER:$TARGET_USER" "$DESKTOP_DIR/teleprompter-mirror.desktop"
 runuser -u "$TARGET_USER" -- update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
-echo "Installing systemd user service..."
+echo "Installing systemd user services..."
 USER_SERVICE_DIR="$TARGET_HOME/.config/systemd/user"
 mkdir -p "$USER_SERVICE_DIR"
 sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$SCRIPT_DIR/systemd/teleprompter-mirror.service" \
     > "$USER_SERVICE_DIR/teleprompter-mirror.service"
 chown "$TARGET_USER:$TARGET_USER" "$USER_SERVICE_DIR/teleprompter-mirror.service"
+sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$SCRIPT_DIR/systemd/teleprompter-camera-keepalive.service" \
+    > "$USER_SERVICE_DIR/teleprompter-camera-keepalive.service"
+chown "$TARGET_USER:$TARGET_USER" "$USER_SERVICE_DIR/teleprompter-camera-keepalive.service"
 XDG_DIR="/run/user/$(id -u "$TARGET_USER")"
 runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
     systemctl --user daemon-reload
@@ -100,5 +103,6 @@ echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter"
 echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter-camera"
 echo "  desktop: $DESKTOP_DIR/teleprompter-mirror.desktop"
 echo "  systemd: $USER_SERVICE_DIR/teleprompter-mirror.service (user)"
+echo "  systemd: $USER_SERVICE_DIR/teleprompter-camera-keepalive.service (user, on-demand)"
 echo ""
 echo "To uninstall: sudo $SCRIPT_DIR/uninstall.sh"

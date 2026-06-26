@@ -123,8 +123,14 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   `camera-control.py start`, which checks camera status via `getEvent` and
   only calls `startRecMode` if the camera is in NotReady (brief WiFi blips
   may not reset Smart Remote). Routine DHCP renewals (~every 27 min) only
-  log, no camera API calls. Uses `CONNECTION_ID` env var to identify the
-  connection. No keepalive or periodic polling of any kind.
+  log, no camera API calls. Also manages the keepalive service lifecycle:
+  starts `teleprompter-camera-keepalive.service` on `up`, stops it on `down`.
+  Uses `CONNECTION_ID` env var to identify the connection.
+- `teleprompter-camera-keepalive.service` — systemd user service. Runs
+  `camera-control.py keepalive`, which polls `getEvent` every 160s to prevent
+  the camera AP from kicking the client for WiFi inactivity. Read-only — no
+  state changes, no zoom commands. Not auto-started at login; the NM
+  dispatcher starts/stops it when camera WiFi connects/disconnects.
 - `99-teleprompter-tether.rules` — udev rule. Detects the Samsung tablet connecting
   in tethering+ADB mode (`04e8:6864`) and triggers `teleprompter-adb-reverse.service`.
   Covers the case where the laptop disconnects and reconnects (suspend/resume, KVM
@@ -224,11 +230,14 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   full Smart Remote Control app is installed (not Smart Remote Embedded). Sony
   discontinued PlayMemories Camera Apps, so the upgrade is no longer available.
   Workaround: use AF-C mode and trigger refocus via a small zoom nudge.
-- The A6300's WiFi AP resets when it receives frequent HTTP requests. Keepalive
-  pings at 60s caused 0.55 disassociations/hr; at 300s, 0.15/hr; with no pings,
-  zero disassociations over 92 hours. Do not poll the Camera Remote API unless
-  the user explicitly triggered a command. The NM dispatcher handles recovery
-  from any WiFi drops without needing periodic polling.
+- The A6300's WiFi AP was initially observed crashing under frequent HTTP
+  requests (keepalive at 60s caused 0.55 disassociations/hr). However, later
+  testing showed that **read-only `getEvent` polling is safe** — 6 req/min
+  for 17+ hours (6,000+ requests) caused zero AP instability. The crashes
+  were likely caused by write operations (`startRecMode`, `actZoom`) combined
+  with other stressors (USB autosuspend, NM background scanning) that have
+  since been fixed. A 160-second `getEvent` keepalive now runs permanently
+  via `teleprompter-camera-keepalive.service` to prevent inactivity kicks.
 - The A6300's WiFi AP also disassociates idle clients (802.11 Reason 4:
   DISASSOC_DUE_TO_INACTIVITY). This is more frequent after laptop reboots —
   observed as clusters of exactly 10-minute-interval kicks that taper off over

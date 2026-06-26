@@ -1,0 +1,9 @@
+[Unit]
+Description=Camera WiFi keepalive (getEvent every 160s)
+
+[Service]
+Type=exec
+EnvironmentFile=-%h/.config/teleprompter-mirror/config.env
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/camera/camera-control.py keepalive
+Restart=on-failure
+RestartSec=10

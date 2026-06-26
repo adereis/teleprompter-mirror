@@ -18,6 +18,7 @@ Usage:
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
     camera-control.py start             # Just startRecMode (no zoom change)
+    camera-control.py keepalive         # Poll camera every 160s to prevent WiFi idle kick
 """
 
 import json
@@ -42,6 +43,7 @@ SSDP_TIMEOUT = 3
 # falling back to the A6300's fixed soft-AP address.
 DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
 DEFAULT_ZOOM_DURATION = 1.2
+KEEPALIVE_INTERVAL = 160
 
 log = logging.getLogger("camera-control")
 
@@ -324,6 +326,18 @@ def cmd_start(endpoint):
               " — no recovery needed")
 
 
+def cmd_keepalive(endpoint):
+    """Poll camera periodically to prevent WiFi inactivity disconnect."""
+    print(f"Keepalive started (interval {KEEPALIVE_INTERVAL}s)")
+    while True:
+        time.sleep(KEEPALIVE_INTERVAL)
+        result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
+        if result is None:
+            print("keepalive: camera unreachable")
+        else:
+            print("keepalive: OK")
+
+
 def cmd_apis(endpoint):
     """List all available API methods."""
     result = api_call(endpoint, "getAvailableApiList")
@@ -359,6 +373,8 @@ def main():
         cmd_reconnect(endpoint)
     elif cmd == "start":
         cmd_start(endpoint)
+    elif cmd == "keepalive":
+        cmd_keepalive(endpoint)
     elif cmd == "apis":
         cmd_apis(endpoint)
     else:

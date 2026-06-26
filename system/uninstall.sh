@@ -21,6 +21,9 @@ systemctl daemon-reload
 
 XDG_DIR="/run/user/$(id -u "$TARGET_USER")"
 runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+    systemctl --user stop teleprompter-camera-keepalive.service 2>/dev/null || true
+rm -f "$TARGET_HOME/.config/systemd/user/teleprompter-camera-keepalive.service"
+runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
     systemctl --user disable --now teleprompter-mirror.service 2>/dev/null || true
 rm -f "$TARGET_HOME/.config/systemd/user/teleprompter-mirror.service"
 runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
