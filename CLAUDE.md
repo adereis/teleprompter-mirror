@@ -251,9 +251,16 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   handler catches these silent re-associations and runs `camera-control.py
   start`, which checks camera status via `getEvent` and only calls
   `startRecMode` if the camera actually reset to NotReady.
-- The MT7601U's `iw station dump` reports `beacon_loss=88` as a fixed value
-  regardless of actual conditions — likely a driver reporting bug. Do not rely
-  on this field for diagnostics.
+- The MT7601U's `iw station dump` `beacon_loss` is a cumulative counter that
+  persists across re-associations (resets on driver load). Its *rate of change*
+  — not its absolute value — is a useful diagnostic: during stable operation it
+  barely moves (single digits over many hours), but it spikes during 2.4 GHz
+  channel congestion **while signal strength stays strong**, which makes it a
+  leading indicator of an impending disassociation. Example (2026-09-01, ch 6):
+  flat at 4→5 over 8h, then 5→50 during a ~1h evening interference episode that
+  ended in a Reason 2/3 drop, then flat again 50→51 over the following 10h. (An
+  earlier note that this field is stuck at a fixed 88 no longer holds — likely a
+  prior driver version; verify on the running kernel before trusting old values.)
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
