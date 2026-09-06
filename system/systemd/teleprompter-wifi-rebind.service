@@ -1,5 +1,5 @@
 [Unit]
-Description=Re-probe MT7601U WiFi adapter if driver fails to bind
+Description=Re-probe AR9271 WiFi adapter if driver fails to bind
 
 [Service]
 Type=oneshot

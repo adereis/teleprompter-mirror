@@ -1,19 +1,19 @@
 #!/bin/bash
-# Ensure the MT7601U WiFi adapter's driver binds after USB enumeration.
+# Ensure the AR9271 WiFi adapter's driver binds after USB enumeration.
 # Called by teleprompter-wifi-rebind.service (triggered via udev).
 #
-# After KVM switches or port changes, the mt7601u driver sometimes fails to
+# After KVM switches or port changes, the ath9k_htc driver can fail to
 # claim the USB interface despite successful enumeration. This script waits
 # for the normal driver probe, then forces a USB re-probe if wlan0 is missing.
 set -euo pipefail
 
 TAG="teleprompter-wifi"
-VENDOR="148f"
-PRODUCT="7601"
+VENDOR="0cf3"
+PRODUCT="9271"
 MAX_RETRIES=3
 PROBE_WAIT=5
 
-# Find the MT7601U sysfs device node (excludes interface nodes containing ':')
+# Find the AR9271 sysfs device node (excludes interface nodes containing ':')
 find_device() {
     local d vid pid
     for d in /sys/bus/usb/devices/*/; do
@@ -34,7 +34,7 @@ fix_autosuspend() {
     local ctrl="$dev/power/control"
     if [ -e "$ctrl" ] && [ "$(cat "$ctrl")" != "on" ]; then
         echo "on" > "$ctrl"
-        logger -t "$TAG" "Disabled USB autosuspend on MT7601U ($dev)"
+        logger -t "$TAG" "Disabled USB autosuspend on AR9271 ($dev)"
     fi
 }
 
@@ -46,13 +46,13 @@ if ip link show wlan0 &>/dev/null; then
     exit 0
 fi
 
-logger -t "$TAG" "wlan0 missing after MT7601U enumeration — attempting recovery"
+logger -t "$TAG" "wlan0 missing after AR9271 enumeration — attempting recovery"
 
 for attempt in $(seq 1 "$MAX_RETRIES"); do
     dev=$(find_device) || true
 
     if [ -z "$dev" ]; then
-        logger -t "$TAG" "MT7601U not found in sysfs (EPROTO?) — physical replug required"
+        logger -t "$TAG" "AR9271 not found in sysfs (EPROTO?) — physical replug required"
         exit 1
     fi
 
