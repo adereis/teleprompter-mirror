@@ -99,7 +99,7 @@ menu after changing modes.
 ### First-time setup
 
 1. Connect the camera's HDMI output to the USB capture adapter
-2. Plug in the dedicated USB WiFi adapter (MT7601U) — it appears as `wlan0`
+2. Plug in the dedicated USB WiFi adapter (Atheros AR9271) — it appears as `wlan0`
 3. Set the camera mode dial to **Movie**
 4. On the camera: MENU -> Application -> Application List -> Smart Remote
    Embedded

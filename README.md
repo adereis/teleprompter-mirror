@@ -151,7 +151,7 @@ The cast page is configured for video call mirroring:
 - Python 3 (standard library only) — for the mirror server and camera control
 - Chrome or Chromium on both laptop and tablet
 - `adb` — for USB tethering setup and ADB reverse port forwarding
-- USB WiFi adapter (MT7601U or similar) — for camera control (optional)
+- USB WiFi adapter (Atheros AR9271 or similar) — for camera control (optional)
 
 ## Repository layout
 
@@ -171,7 +171,7 @@ tests/       stdlib unit tests (run with ./run-tests.sh)
 ## Forking and adapting
 
 This project is built around one specific setup — a Samsung Galaxy Tab, a Sony
-A6300, an MT7601U WiFi adapter, Fedora/GNOME — and it's deliberately small. I'm
+A6300, an Atheros AR9271 WiFi adapter, Fedora/GNOME — and it's deliberately small. I'm
 not growing it into a general-purpose tool or maintaining it for others, so
 there's no issue tracker and no contribution process. The intended workflow is:
 **fork it, and drive your own version.**
@@ -203,6 +203,6 @@ scripts with `shellcheck` when it's present.
 [MIT](LICENSE) © Ademar Reis
 
 This is a personal project shared in the hope it's useful. It's built around
-specific hardware (a Samsung tablet, a Sony A6300, an MT7601U WiFi adapter), but
+specific hardware (a Samsung tablet, a Sony A6300, an Atheros AR9271 WiFi adapter), but
 the design keeps environment-specific values in configuration rather than code,
 so adapting it to your own setup is mostly a matter of editing one config file.

@@ -142,17 +142,18 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - `teleprompter-adb-reverse.service` — systemd one-shot service triggered by the
   tethering udev rule. Waits for ADB readiness (`adb wait-for-device`) then
   re-establishes `adb reverse tcp:8047 tcp:8047`.
-- `99-teleprompter-wifi.rules` — udev rule. Detects the MT7601U USB WiFi adapter
-  (`148f:7601`) and triggers `teleprompter-wifi-rebind.service`. After KVM
-  switches or port changes, the `mt7601u` driver sometimes fails to claim the
+- `99-teleprompter-wifi.rules` — udev rule. Detects the Atheros AR9271 USB WiFi
+  adapter (`0cf3:9271`) and triggers `teleprompter-wifi-rebind.service`. After
+  KVM switches or port changes, the `ath9k_htc` driver can fail to claim the
   USB interface despite successful enumeration (no `wlan0` created). The service
-  waits for normal probe, then forces a USB re-probe if needed.
+  waits for normal probe, then forces a USB re-probe if needed. (Replaced the
+  original MT7601U `148f:7601`, whose receiver failed 2026-09.)
 - `teleprompter-tether-prompt.service` — systemd one-shot service triggered by
   the tablet udev rule. Runs `adb shell am start` as the user.
 - `teleprompter-wifi-rebind.service` — systemd one-shot service triggered by
   the WiFi adapter udev rule. Runs `wifi-rebind.sh` as root (needs sysfs
   write access to toggle USB device authorization).
-- `wifi-rebind.sh` — Recovery script for the MT7601U. Waits 5 seconds for
+- `wifi-rebind.sh` — Recovery script for the AR9271. Waits 5 seconds for
   the driver to probe normally, then checks for `wlan0`. If missing, finds the
   device in sysfs and toggles its `authorized` attribute to force re-enumeration
   and driver re-probe. Retries up to 3 times. Logs to `teleprompter-wifi`
@@ -170,8 +171,8 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 
 - `camera-control.py` — Controls the Sony A6300 camera via Sony's Camera Remote
   API (JSON-RPC over WiFi). Requires the camera to be in Movie mode with Smart
-  Remote Embedded running. A dedicated USB WiFi adapter (MT7601U, `wlan0`) connects
-  to the camera's WiFi AP (`DIRECT-xxxx:ILCE-6300`) via the `Camera-A6300` NM
+  Remote Embedded running. A dedicated USB WiFi adapter (Atheros AR9271, `wlan0`)
+  connects to the camera's WiFi AP (`DIRECT-xxxx:ILCE-6300`) via the `Camera-A6300` NM
   profile, leaving the main WiFi free for internet. HDMI capture continues working
   simultaneously. Supports zoom in/out (power zoom lens only), refocus nudge
   (zoom in+out to trigger AF-C), and status queries. No external deps (stdlib only).
@@ -267,8 +268,8 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   `start` re-runs `startRecMode`. The USB WiFi dongle is never the victim in
   these — it keeps scanning fine — which is how you know it's the camera, not
   the adapter.
-- The MT7601U's `iw station dump` `beacon_loss` is a cumulative counter that
-  persists across re-associations (resets on driver load). Its *rate of change*
+- The camera dongle's `iw station dump` `beacon_loss` is a cumulative counter
+  that persists across re-associations (resets on driver load). Its *rate of change*
   — not its absolute value — is a useful diagnostic: during stable operation it
   barely moves (single digits over many hours), but it spikes during 2.4 GHz
   channel congestion **while signal strength stays strong**, which makes it a
@@ -280,7 +281,7 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
-  A dedicated USB WiFi adapter (MT7601U, `wlan0`) connects to the camera via the
+  A dedicated USB WiFi adapter (Atheros AR9271, `wlan0`) connects to the camera via the
   `Camera-A6300` NM profile, so the main WiFi (`wlp9s0`) stays on the home/office
   network. The profile auto-connects when the camera's AP is visible.
 - The laptop's built-in webcam (Integrated RGB Camera) has higher PipeWire
