@@ -117,17 +117,19 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - `99-teleprompter-camera` — NetworkManager dispatcher. Acts on `up` (runs
   `camera-control.py reconnect` to re-initialize Smart Remote), `down`
   (logs disconnection), and `dhcp4-change` (logs WiFi station metrics from
-  `iw` for retrospective analysis). On `dhcp4-change`, checks kernel log
-  for a recent disassociation event — if found, this DHCP change follows a
-  WiFi re-association (e.g. after an inactivity kick) and runs
-  `camera-control.py start`, which checks camera status via `getEvent` and
-  only calls `startRecMode` if the camera is in NotReady (brief WiFi blips
-  may not reset Smart Remote). Routine DHCP renewals (~every 27 min) only
-  log, no camera API calls. Also manages the keepalive service lifecycle:
+  `iw` for retrospective analysis). On `dhcp4-change` it then runs
+  `camera-control.py start`, which is self-gating: it checks camera status via
+  `getEvent` and only calls `startRecMode` (+ zoom restore) if the camera is in
+  NotReady (brief WiFi blips may not reset Smart Remote). This replaced an
+  earlier heuristic that grepped the kernel log for a `disassociated` line —
+  that missed power-loss drops, which log `authentication timed out` instead of
+  a disassociation and so left the camera stuck in NotReady. Verifying actual
+  camera state catches every drop type; the cost is one cheap read-only
+  `getEvent` per DHCP renewal (~every 27 min). Also manages the keepalive service lifecycle:
   starts `teleprompter-camera-keepalive.service` on `up`, stops it on `down`.
   Uses `CONNECTION_ID` env var to identify the connection.
 - `teleprompter-camera-keepalive.service` — systemd user service. Runs
-  `camera-control.py keepalive`, which polls `getEvent` every 160s to prevent
+  `camera-control.py keepalive`, which polls `getEvent` every 10s to prevent
   the camera AP from kicking the client for WiFi inactivity. Read-only — no
   state changes, no zoom commands. Not auto-started at login; the NM
   dispatcher starts/stops it when camera WiFi connects/disconnects.
@@ -236,7 +238,7 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   for 17+ hours (6,000+ requests) caused zero AP instability. The crashes
   were likely caused by write operations (`startRecMode`, `actZoom`) combined
   with other stressors (USB autosuspend, NM background scanning) that have
-  since been fixed. A 160-second `getEvent` keepalive now runs permanently
+  since been fixed. A 10-second `getEvent` keepalive now runs permanently
   via `teleprompter-camera-keepalive.service` to prevent inactivity kicks.
 - The A6300's WiFi AP also disassociates idle clients (802.11 Reason 4:
   DISASSOC_DUE_TO_INACTIVITY). This is more frequent after laptop reboots —
@@ -251,6 +253,20 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   handler catches these silent re-associations and runs `camera-control.py
   start`, which checks camera status via `getEvent` and only calls
   `startRecMode` if the camera actually reset to NotReady.
+- Not every camera drop is an RF/inactivity event. A **power interruption to
+  the camera** (the A6300 runs on a DC "fake battery"; a loose barrel/dummy
+  connector or a brownout when a shared-circuit device like a sit/stand desk
+  motor kicks in) resets Smart Remote and can make the WiFi AP go fully silent.
+  Diagnostic tells: (1) `nmcli device wifi list` sees neighbor APs but **not**
+  `DIRECT-*:ILCE-6300` — the AP is off-air, so trust the scan, not the camera's
+  LCD, which can still show the "connect to SSID" / "Connecting…" screen while
+  the radio is dead; (2) the kernel logs `wlan0: authentication ... timed out`
+  (and *no* `disassociated (Reason:N)` line). A hard AP wedge needs a **camera
+  power-cycle** (exiting/re-entering Smart Remote is not enough); a brief drop
+  self-recovers but leaves Smart Remote in NotReady until the dispatcher's
+  `start` re-runs `startRecMode`. The USB WiFi dongle is never the victim in
+  these — it keeps scanning fine — which is how you know it's the camera, not
+  the adapter.
 - The MT7601U's `iw station dump` `beacon_loss` is a cumulative counter that
   persists across re-associations (resets on driver load). Its *rate of change*
   — not its absolute value — is a useful diagnostic: during stable operation it

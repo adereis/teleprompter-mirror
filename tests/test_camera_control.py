@@ -59,6 +59,44 @@ class ParseDeviceDescriptorTest(unittest.TestCase):
         self.assertIsNone(endpoint)
 
 
+def make_event(status="IDLE", zoom=48):
+    """A getEvent-shaped result: fixed-index array with None gaps, a
+    cameraStatus object, and a zoomInformation object (as the A6300 returns)."""
+    return [
+        {"type": "availableApiList", "names": ["getEvent", "actZoom"]},
+        {"type": "cameraStatus", "cameraStatus": status},
+        None,
+        {"type": "zoomInformation", "zoomPosition": zoom, "zoomNumberBox": 1},
+    ]
+
+
+class ParseCameraStateTest(unittest.TestCase):
+    """parse_camera_state drives the re-association recovery decision:
+    recover iff the camera reports NotReady. Pin down that logic."""
+
+    def test_extracts_status_and_zoom(self):
+        self.assertEqual(cam.parse_camera_state(make_event("IDLE", 48)),
+                         ("IDLE", 48))
+
+    def test_detects_notready(self):
+        # The case the whole recovery path exists for.
+        status, _ = cam.parse_camera_state(make_event("NotReady", 0))
+        self.assertEqual(status, "NotReady")
+
+    def test_tolerates_none_gaps_and_reordering(self):
+        # Reversed order with the None gap still resolves both fields — the
+        # helper searches by type rather than trusting fixed indices.
+        status, zoom = cam.parse_camera_state(list(reversed(make_event("IDLE", 30))))
+        self.assertEqual((status, zoom), ("IDLE", 30))
+
+    def test_missing_fields_return_none(self):
+        self.assertEqual(cam.parse_camera_state([]), (None, None))
+        self.assertEqual(cam.parse_camera_state(None), (None, None))
+        # Zoom present but no cameraStatus object -> status None, zoom found.
+        only_zoom = [{"type": "zoomInformation", "zoomPosition": 12}]
+        self.assertEqual(cam.parse_camera_state(only_zoom), (None, 12))
+
+
 class ConfigWiringTest(unittest.TestCase):
     def test_default_endpoint_comes_from_config(self):
         # DEFAULT_ENDPOINT must be wired through the config loader rather than

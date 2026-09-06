@@ -4,9 +4,9 @@
 # Events:
 #   up           — WiFi connected: initialize Smart Remote, start keepalive
 #   down         — WiFi lost: stop keepalive, log for retrospective analysis
-#   dhcp4-change — DHCP lease changed: log WiFi station metrics; if this
-#                  follows a re-association (not a routine renewal), recover
-#                  Smart Remote. Skips recovery if `up` already handled it.
+#   dhcp4-change — DHCP lease changed: log WiFi station metrics, then verify
+#                  camera state via `start` (recovers Smart Remote iff the
+#                  camera reports NotReady). Skips if `up` already handled it.
 
 IFACE="$1"
 ACTION="$2"
@@ -69,18 +69,20 @@ case "$ACTION" in
         keepalive_stop
         ;;
     dhcp4-change)
+        log_wifi_metrics
         if [ -f "$LOCK" ]; then
             log "DHCP after up on $IFACE — skipping (up handler already recovering)"
-            log_wifi_metrics
             rm -f "$LOCK"
-        elif journalctl -k --since='-2min' --no-pager 2>/dev/null \
-            | grep -q "$IFACE:.*disassociated"; then
-            log "WiFi re-association on $IFACE — recovering Smart Remote"
-            log_wifi_metrics
-            run_start
         else
-            log "DHCP renewal on $IFACE (routine)"
-            log_wifi_metrics
+            # A DHCP change can follow a re-association without a full down/up
+            # cycle (brief blip), and power-loss drops don't even leave a
+            # kernel 'disassociated' line — they log 'authentication timed
+            # out'. So don't guess the drop type from kernel logs: ask the
+            # camera. `start` is self-gating — it runs startRecMode + zoom
+            # restore only if getEvent reports NotReady, otherwise it just logs
+            # the state and exits. One cheap read-only poll per renewal.
+            log "DHCP change on $IFACE — verifying camera state"
+            run_start
         fi
         ;;
 esac

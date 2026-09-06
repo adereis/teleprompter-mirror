@@ -17,8 +17,8 @@ Usage:
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
-    camera-control.py start             # Just startRecMode (no zoom change)
-    camera-control.py keepalive         # Poll camera every 160s to prevent WiFi idle kick
+    camera-control.py start             # startRecMode + zoom restore, only if camera reset
+    camera-control.py keepalive         # Poll camera every 10s to prevent WiFi idle kick
 """
 
 import json
@@ -43,7 +43,7 @@ SSDP_TIMEOUT = 3
 # falling back to the A6300's fixed soft-AP address.
 DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
 DEFAULT_ZOOM_DURATION = 1.2
-KEEPALIVE_INTERVAL = 10
+KEEPALIVE_INTERVAL = 10  # seconds between read-only getEvent polls
 
 log = logging.getLogger("camera-control")
 
@@ -305,25 +305,45 @@ def cmd_reconnect(endpoint):
 
 
 
+def parse_camera_state(result):
+    """Extract (cameraStatus, zoomPosition) from a getEvent result list.
+
+    Pure helper: takes the already-decoded getEvent array and returns the
+    camera status string (or None) and zoom position (or None), locating each
+    by item type rather than fixed indices so it tolerates missing/reordered
+    slots. This is the decision the re-association recovery hinges on, so it's
+    kept free of I/O and unit-tested.
+    """
+    status = None
+    zoom = None
+    for item in result or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "cameraStatus":
+            status = item.get("cameraStatus")
+        elif item.get("type") == "zoomInformation":
+            zoom = item.get("zoomPosition")
+    return status, zoom
+
+
 def cmd_start(endpoint):
-    """Check camera state; start rec mode only if needed. No zoom change."""
+    """Check camera state; start rec mode only if the camera reset.
+
+    Self-gating, so it's safe to call on any re-association or DHCP change:
+    runs startRecMode + zoom restore only when the camera reports NotReady
+    (e.g. a power-loss drop reset Smart Remote); otherwise just logs state.
+    """
     result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
     if result is None:
         print("Camera not reachable.")
         sys.exit(1)
-    status = result[1].get("cameraStatus") if isinstance(result[1], dict) else None
-    zoom = None
-    for item in result:
-        if isinstance(item, dict) and item.get("type") == "zoomInformation":
-            zoom = item["zoomPosition"]
-            break
+    status, zoom = parse_camera_state(result)
     if status == "NotReady":
         api_call(endpoint, "startRecMode", exit_on_error=False)
         print("Camera was NotReady — recovering")
         restore_zoom(endpoint)
     else:
-        print(f"Camera status: {status} (zoom: {zoom})"
-              " — no recovery needed")
+        print(f"Camera status: {status} (zoom: {zoom}) — no recovery needed")
 
 
 def cmd_keepalive(endpoint):
