@@ -297,6 +297,12 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   above `ZOOM_RESTORE_CEILING` (75) and retries with backoff — letting the link
   settle rather than mis-actuating. If `zoom set` reports "link too slow", check
   `iw dev wlan0 link` / signal and retry once the link recovers.
+  Every timed CLI move uses this helper, validates duration before moving, and
+  attempts `stop` in `finally`, including a failed start or Ctrl-C during the
+  hold. A disconnected link can still prevent the stop from reaching the lens.
+  Missing or invalid zoom telemetry is an error, never an assumed position of 0.
+  Recovery also exits nonzero for missing camera status, failed `startRecMode`,
+  or exhausted zoom retries, so a failed recovery cannot look successful.
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.

@@ -7,6 +7,7 @@ it's how the script finds the camera when SSDP succeeds.
 
 import types
 import unittest
+from unittest.mock import call, patch
 
 from loader import load_module
 
@@ -149,6 +150,29 @@ class RecoveryGatingTest(unittest.TestCase):
         self.assertEqual(self.restored, ["EP"])
         self.assertIn("startRecMode", self.methods)
 
+    def test_failed_start_does_not_move_lens(self):
+        with patch.object(cam, "api_call", side_effect=[make_event("NotReady"), SystemExit(1)]) as api:
+            with self.assertRaises(SystemExit):
+                cam.cmd_start("EP")
+        self.assertEqual(self.restored, [])
+        self.assertEqual(api.call_args, call("EP", "startRecMode"))
+
+    def test_failed_restore_fails_recovery(self):
+        self._install_api(make_event("NotReady", 0))
+        cam.restore_zoom = lambda ep: False
+        for command in (cam.cmd_start, cam.cmd_reconnect):
+            with self.subTest(command=command.__name__):
+                with self.assertRaises(SystemExit) as error:
+                    command("EP")
+                self.assertEqual(error.exception.code, 1)
+
+    def test_missing_status_cannot_claim_recovery_unnecessary(self):
+        self._install_api([])
+        with self.assertRaises(SystemExit):
+            cam.cmd_start("EP")
+        self.assertEqual(self.restored, [])
+        self.assertNotIn("startRecMode", self.methods)
+
 
 class RestoreZoomTest(unittest.TestCase):
     """restore_zoom must reject an implausibly high final position (the 'stop'
@@ -177,6 +201,83 @@ class RestoreZoomTest(unittest.TestCase):
     def test_accepts_sane_position(self):
         cam.zoom_timed = lambda ep, d, dur: 38
         self.assertTrue(cam.restore_zoom("EP"))
+
+
+class TimedZoomTest(unittest.TestCase):
+    def setUp(self):
+        self.act = self.enterContext(patch.object(cam, "_actzoom", return_value=0.1))
+        self.sleep = self.enterContext(patch.object(cam.time, "sleep"))
+        self.position = self.enterContext(patch.object(cam, "get_zoom_position", return_value=38))
+
+    def test_successful_move_stops_and_reads_position(self):
+        self.assertEqual(cam.zoom_timed("EP", "in", 1.2), 38)
+        self.assertEqual(self.act.call_args_list,
+                         [call("EP", "in", "start"), call("EP", "in", "stop")])
+        self.sleep.assert_has_calls([call(1.2), call(0.3)])
+
+    def test_start_failure_still_attempts_stop(self):
+        self.act.side_effect = [SystemExit(1), 0.1]
+        with self.assertRaises(SystemExit):
+            cam.zoom_timed("EP", "out", 1)
+        self.act.assert_called_with("EP", "out", "stop")
+        self.sleep.assert_not_called()
+        self.position.assert_not_called()
+
+    def test_interrupted_hold_still_attempts_stop(self):
+        self.sleep.side_effect = KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            cam.zoom_timed("EP", "in", 1)
+        self.act.assert_called_with("EP", "in", "stop")
+
+    def test_slow_start_skips_hold_and_fails_after_stop(self):
+        self.act.side_effect = [cam.ZOOM_LATENCY_LIMIT + 1, 0.1]
+        with self.assertRaises(cam.ZoomTimingError):
+            cam.zoom_timed("EP", "in", 1)
+        self.act.assert_called_with("EP", "in", "stop")
+        self.sleep.assert_not_called()
+
+    def test_slow_stop_is_not_reported_as_success(self):
+        self.act.side_effect = [0.1, cam.ZOOM_LATENCY_LIMIT + 1]
+        with self.assertRaises(cam.ZoomTimingError):
+            cam.zoom_timed("EP", "in", 1)
+        self.position.assert_not_called()
+
+    def test_stop_failure_propagates(self):
+        self.act.side_effect = [0.1, SystemExit(1)]
+        with self.assertRaises(SystemExit):
+            cam.zoom_timed("EP", "in", 1)
+        self.position.assert_not_called()
+
+    def test_invalid_duration_cannot_start_either_leg(self):
+        for value in (-1, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    cam.zoom_timed("EP", "in", value)
+                with self.assertRaises(ValueError):
+                    cam.cmd_zoom_set("EP", value)
+        self.act.assert_not_called()
+
+    def test_cli_timed_move_uses_latency_guard(self):
+        self.act.side_effect = [cam.ZOOM_LATENCY_LIMIT + 1, 0.1]
+        with self.assertRaises(SystemExit) as error:
+            cam.cmd_zoom("EP", "out", "2s")
+        self.assertEqual(error.exception.code, 1)
+        self.act.assert_called_with("EP", "out", "stop")
+
+
+class ZoomTelemetryTest(unittest.TestCase):
+    def test_zero_is_a_valid_reported_position(self):
+        with patch.object(cam, "api_call", return_value=make_event(zoom=0)):
+            self.assertEqual(cam.get_zoom_position("EP"), 0)
+
+    def test_missing_or_invalid_position_is_an_error(self):
+        for event in ([], None, *[make_event(zoom=value) for value in
+                                 (None, "0", True, -1, 101, float("nan"))]):
+            with self.subTest(event=event):
+                with patch.object(cam, "api_call", return_value=event):
+                    with self.assertRaises(SystemExit) as error:
+                        cam.get_zoom_position("EP")
+                    self.assertEqual(error.exception.code, 1)
 
 
 class ConfigWiringTest(unittest.TestCase):

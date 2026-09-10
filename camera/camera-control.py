@@ -23,6 +23,7 @@ Usage:
 
 import json
 import logging
+import math
 import socket
 import sys
 import time
@@ -203,28 +204,39 @@ def cmd_discover(endpoint):
 def get_zoom_position(endpoint):
     """Return the current zoom position (0-100)."""
     result = api_call(endpoint, "getEvent", [False])
-    for item in result:
-        if isinstance(item, dict) and item.get("type") == "zoomInformation":
-            return item["zoomPosition"]
-    return 0
+    _, position = parse_camera_state(result)
+    if (isinstance(position, bool) or not isinstance(position, (int, float))
+            or not math.isfinite(position) or not 0 <= position <= 100):
+        print("Camera did not report a valid zoom position.")
+        sys.exit(1)
+    return position
+
+
+def _zoom_duration(value):
+    """Validate before starting the lens, including the homing leg of set."""
+    duration = float(value)
+    if not math.isfinite(duration) or duration < 0:
+        raise ValueError("Zoom duration must be a finite, nonnegative number.")
+    return duration
 
 
 def cmd_zoom(endpoint, direction, movement="1shot"):
     """Control power zoom."""
     if direction == "stop":
         direction, movement = "in", "stop"
-    if direction == "set":
-        duration = float(movement) if movement != "1shot" else DEFAULT_ZOOM_DURATION
-        cmd_zoom_set(endpoint, duration)
-        return
-    if movement.endswith("s"):
-        duration = float(movement[:-1])
-        api_call(endpoint, "actZoom", [direction, "start"])
-        time.sleep(duration)
-        api_call(endpoint, "actZoom", [direction, "stop"])
-        pos = get_zoom_position(endpoint)
-        print(f"Zoom {direction} {duration}s: stopped at {pos}/100")
-        return
+    try:
+        if direction == "set":
+            duration = movement if movement != "1shot" else DEFAULT_ZOOM_DURATION
+            cmd_zoom_set(endpoint, _zoom_duration(duration))
+            return
+        if movement.endswith("s"):
+            duration = _zoom_duration(movement[:-1])
+            pos = zoom_timed(endpoint, direction, duration)
+            print(f"Zoom {direction} {duration}s: stopped at {pos}/100")
+            return
+    except (ValueError, ZoomTimingError) as error:
+        print(f"Zoom failed: {error}")
+        sys.exit(1)
     api_call(endpoint, "actZoom", [direction, movement])
     print(f"Zoom {direction} {movement}: OK")
 
@@ -246,10 +258,15 @@ def zoom_timed(endpoint, direction, duration):
     motor runtime. On a slow start the motor is already running uncontrolled, so
     stop it immediately (skip the hold) to limit the over-run before raising.
     """
-    start_rtt = _actzoom(endpoint, direction, "start")
-    if start_rtt <= ZOOM_LATENCY_LIMIT:
-        time.sleep(duration)
-    stop_rtt = _actzoom(endpoint, direction, "stop")
+    duration = _zoom_duration(duration)
+    try:
+        start_rtt = _actzoom(endpoint, direction, "start")
+        if start_rtt <= ZOOM_LATENCY_LIMIT:
+            time.sleep(duration)
+    finally:
+        # A timed-out start may still have reached the camera. Attempt stop
+        # even if start failed or the hold was interrupted with Ctrl-C.
+        stop_rtt = _actzoom(endpoint, direction, "stop")
     worst = max(start_rtt, stop_rtt)
     if worst > ZOOM_LATENCY_LIMIT:
         raise ZoomTimingError(
@@ -263,6 +280,7 @@ def cmd_zoom_set(endpoint, duration=None):
     """Zoom out fully, then zoom in for DEFAULT_ZOOM_DURATION."""
     if duration is None:
         duration = DEFAULT_ZOOM_DURATION
+    duration = _zoom_duration(duration)
     try:
         zoom_timed(endpoint, "out", 10)
         pos = zoom_timed(endpoint, "in", duration)
@@ -405,10 +423,14 @@ def _recover_if_reset(endpoint, result):
     rides in on, the timed restore can even drive the lens to 100/100.
     """
     status, zoom = parse_camera_state(result)
+    if status is None:
+        print("Camera did not report its status; cannot decide whether to recover.")
+        sys.exit(1)
     if status == "NotReady":
-        api_call(endpoint, "startRecMode", exit_on_error=False)
+        api_call(endpoint, "startRecMode")
         print("Camera was NotReady — recovering")
-        restore_zoom(endpoint)
+        if not restore_zoom(endpoint):
+            sys.exit(1)
     else:
         print(f"Camera status: {status} (zoom: {zoom}) — no recovery needed")
 
