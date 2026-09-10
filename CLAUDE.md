@@ -188,7 +188,9 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 ### Tests
 
 - `tests/` holds stdlib `unittest` tests (no pytest dependency). `run-tests.sh`
-  runs them plus `py_compile` and `shellcheck`. There's no CI — run it locally.
+  runs them plus `py_compile`, `bash -n`, and required `shellcheck`. Each failed
+  check propagates a nonzero exit status; temporary fixtures use `~/tmp`.
+  There's no CI — run it locally.
 - `app/mirror-server.py` and `camera/camera-control.py` have hyphens, so they
   can't be imported normally. `tests/loader.py` loads them by path via
   `importlib` and puts `lib/` on `sys.path` so `import teleprompter_config`

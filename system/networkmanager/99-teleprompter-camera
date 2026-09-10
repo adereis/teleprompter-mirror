@@ -43,10 +43,12 @@ run_start() {
 }
 
 keepalive_start() {
-    runuser -u __USER__ -- env XDG_RUNTIME_DIR="$XDG_DIR" \
-        systemctl --user start teleprompter-camera-keepalive.service 2>/dev/null \
-        && log "Keepalive started" \
-        || log "Keepalive failed to start"
+    if runuser -u __USER__ -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+        systemctl --user start teleprompter-camera-keepalive.service; then
+        log "Keepalive started"
+    else
+        log "Keepalive failed to start"
+    fi
 }
 
 keepalive_stop() {
