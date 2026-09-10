@@ -11,7 +11,7 @@ from loader import ROOT
 
 
 class CheckRunnerTest(unittest.TestCase):
-    def run_checks(self, shell_source="true\n", lint_status=0):
+    def run_checks(self, shell_source="true\n", lint_status=0, browser_status=0):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copyfile(ROOT / "run-tests.sh", root / "run-tests.sh")
@@ -20,6 +20,7 @@ class CheckRunnerTest(unittest.TestCase):
             tool_dir.mkdir()
             for name, source in {
                 "python3": "exit 0\n",
+                "node": f"exit {browser_status}\n",
                 "git": "printf '%s\\n' fixture.sh\n",
                 "shellcheck": f"exit {lint_status}\n",
             }.items():
@@ -43,5 +44,10 @@ class CheckRunnerTest(unittest.TestCase):
 
     def test_shellcheck_failure_fails_runner(self):
         result = self.run_checks(lint_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("shellcheck clean", result.stdout)
+
+    def test_browser_failure_fails_runner(self):
+        result = self.run_checks(browser_status=1)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("shellcheck clean", result.stdout)

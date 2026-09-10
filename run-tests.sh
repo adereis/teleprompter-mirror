@@ -17,6 +17,10 @@ echo "== Python unit tests =="
 python3 -m unittest discover -s tests "$@"
 
 echo
+echo "== Browser lifecycle tests (Node.js) =="
+node tests/browser.test.js
+
+echo
 echo "== Python byte-compile =="
 python3 -m py_compile app/mirror-server.py camera/camera-control.py lib/teleprompter_config.py
 echo "ok"

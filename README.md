@@ -189,15 +189,17 @@ It's designed to make that easy:
   files (the existing `__PLACEHOLDER__` + `install.sh` pattern shows how).
 
 There's a small test suite to lean on while you change things. Python tests use
-the standard library; shell checks require ShellCheck (`sudo dnf install
-ShellCheck` on Fedora):
+the standard library; development checks also require Node.js and ShellCheck
+(`sudo dnf install nodejs ShellCheck` on Fedora). There are no npm dependencies:
 
 ```bash
 ./run-tests.sh
 ```
 
-It runs the Python unit tests, byte-compiles the tools, and checks shell syntax
-and ShellCheck diagnostics. Any failed check makes the command fail.
+It runs Python unit tests and JavaScript connection tests, byte-compiles the
+tools, and checks shell syntax and ShellCheck diagnostics. Any failed check
+makes the command fail. The JavaScript tests use mocked browser APIs; verifying
+actual video capture and USB latency still requires the laptop and tablet.
 
 ## License
 

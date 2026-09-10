@@ -211,17 +211,19 @@ async function waitForIce(conn) {
 }
 
 async function startCast() {
+  let capture = null;
+  let selecting = true;
+  const onFocus = () => { if (selecting) status('Starting capture…', 'wait'); };
+  document.getElementById('startBtn').disabled = true;
+  window.addEventListener('focus', onFocus);
   try {
     status('Opening window picker…', 'wait');
 
-    let selecting = true;
-    const onFocus = () => { if (selecting) status('Starting capture…', 'wait'); };
-    window.addEventListener('focus', onFocus);
-
-    stream = await navigator.mediaDevices.getDisplayMedia({
+    capture = await navigator.mediaDevices.getDisplayMedia({
       video: {cursor: 'always', frameRate: {ideal: 30, max: 30}},
       audio: false
     });
+    stream = capture;
 
     selecting = false;
     window.removeEventListener('focus', onFocus);
@@ -238,37 +240,68 @@ async function startCast() {
 
     await connect();
   } catch (err) {
+    if (capture && (err.name === 'AbortError' || stream !== capture)) return;
     if (err.name === 'NotAllowedError') status('Cancelled.', '');
-    else { status('Error: ' + err.message, 'err'); console.error(err); }
+    else {
+      status('Error: ' + err.message, 'err');
+      console.error(err);
+      if (capture) await reconnect();
+    }
+  } finally {
+    selecting = false;
+    window.removeEventListener('focus', onFocus);
+    if (!stream) document.getElementById('startBtn').disabled = false;
   }
 }
 
-let reconnecting = false;
+let reconnecting = null;
+let connectionAttempt = null;
+
+async function signalRequest(path, options = {}) {
+  const response = await fetch(path, options);
+  if (!response.ok) throw new Error(`Signaling ${path} failed (${response.status})`);
+  return response;
+}
 
 async function connect() {
-  if (reconnecting) return;
   if (!stream || stream.getVideoTracks()[0]?.readyState !== 'live') return;
+  const capture = stream;
+  if (connectionAttempt) connectionAttempt.abort();
+  const attempt = new AbortController();
+  connectionAttempt = attempt;
+  const current = () => connectionAttempt === attempt && !attempt.signal.aborted && stream === capture &&
+    capture.getVideoTracks()[0]?.readyState === 'live';
+  async function step(promise) {
+    const result = await promise;
+    if (!current()) throw new DOMException('Connection attempt cancelled', 'AbortError');
+    return result;
+  }
+  const request = (path, options = {}) => step(signalRequest(path, {
+    ...options, signal: attempt.signal
+  }));
 
   if (pc) { pc.close(); pc = null; }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
 
-  await fetch('/reset', {method: 'POST'});
+  await request('/reset', {method: 'POST'});
 
-  const activeTrack = (cropMode && cropRect) ? getOrCreateCroppedTrack() : stream.getVideoTracks()[0];
+  const activeTrack = (cropMode && cropRect) ? getOrCreateCroppedTrack() : capture.getVideoTracks()[0];
 
-  pc = new RTCPeerConnection({
+  const conn = new RTCPeerConnection({
     iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
   });
-  dc = pc.createDataChannel('control');
+  pc = conn;
+  dc = conn.createDataChannel('control');
   dc.onmessage = (e) => {
+    if (!current()) return;
     try {
       const msg = JSON.parse(e.data);
       if (msg.viewport) onViewport(msg.viewport.w, msg.viewport.h);
     } catch (_) {}
   };
-  pc.addTrack(activeTrack, stream);
+  conn.addTrack(activeTrack, capture);
 
-  const txc = pc.getTransceivers()[0];
+  const txc = conn.getTransceivers()[0];
   if (txc && txc.setCodecPreferences) {
     const caps = RTCRtpSender.getCapabilities('video');
     if (caps) {
@@ -278,7 +311,7 @@ async function connect() {
     }
   }
 
-  const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+  const sender = conn.getSenders().find(s => s.track?.kind === 'video');
   if (sender) {
     const settings = activeTrack.getSettings();
     const maxW = viewerW || 1920, maxH = viewerH || 1080;
@@ -289,43 +322,45 @@ async function connect() {
       params.encodings[0].maxFramerate = 30;
       if (!cropMode && factor > 1.05) params.encodings[0].scaleResolutionDownBy = factor;
       params.degradationPreference = 'maintain-resolution';
-      await sender.setParameters(params);
+      await step(sender.setParameters(params));
     }
   }
 
-  pc.onconnectionstatechange = () => {
-    const s = pc.connectionState;
+  conn.onconnectionstatechange = () => {
+    if (!current()) return;
+    const s = conn.connectionState;
     if (s === 'connected') {
       document.title = 'Streaming — Teleprompter Mirror';
       status('Connected — streaming to tablet', 'ok');
       document.getElementById('stats').style.display = 'block';
       startStats();
     }
-    if (s === 'disconnected' || s === 'failed') reconnect();
+    if (s === 'disconnected' || s === 'failed') {
+      attempt.abort();
+      reconnect();
+    }
   };
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await waitForIce(pc);
+  const offer = await step(conn.createOffer());
+  await step(conn.setLocalDescription(offer));
+  await step(waitForIce(conn));
 
-  if (!pc) return;
-
-  await fetch('/offer', {
+  await request('/offer', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(pc.localDescription)
+    body: JSON.stringify(conn.localDescription)
   });
 
-  if (!pc) return;
   status('Waiting for tablet to connect…', 'wait');
 
-  while (pc && !pc.remoteDescription) {
-    const res = await fetch('/answer');
-    if (res.ok && res.status === 200) {
-      await pc.setRemoteDescription(await res.json());
+  while (!conn.remoteDescription) {
+    const res = await request('/answer');
+    if (res.status === 200) {
+      const answer = await step(res.json());
+      await step(conn.setRemoteDescription(answer));
       break;
     }
-    await new Promise(r => setTimeout(r, 500));
+    await step(new Promise(r => setTimeout(r, 500)));
   }
 }
 
@@ -335,23 +370,30 @@ async function reconnect() {
     status('Stream ended. Click Share Window to restart.', 'err');
     return;
   }
-  reconnecting = true;
+  const task = {capture: stream};
+  reconnecting = task;
   document.title = 'Reconnecting… — Teleprompter Mirror';
   let delay = 1000;
-  while (stream && stream.getVideoTracks()[0]?.readyState === 'live') {
+  const current = () => reconnecting === task && stream === task.capture &&
+    stream.getVideoTracks()[0]?.readyState === 'live';
+  while (current()) {
     status(`Reconnecting in ${(delay/1000).toFixed(0)}s…`, 'wait');
     await new Promise(r => setTimeout(r, delay));
+    if (!current()) break;
     try {
       await connect();
-      reconnecting = false;
+      if (reconnecting === task) reconnecting = null;
       return;
     } catch (e) {
+      if (!current()) break;
       console.error('Reconnect failed:', e);
       delay = Math.min(delay * 1.5, 10000);
     }
   }
-  reconnecting = false;
-  status('Stream ended during reconnect.', 'err');
+  if (reconnecting === task) {
+    reconnecting = null;
+    status('Stream ended during reconnect.', 'err');
+  }
 }
 
 function getOrCreateCroppedTrack() {
@@ -373,7 +415,9 @@ function getOrCreateCroppedTrack() {
 }
 
 function stopCast() {
-  reconnecting = false;
+  reconnecting = null;
+  if (connectionAttempt) connectionAttempt.abort();
+  connectionAttempt = null;
   disableCrop();
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
@@ -389,7 +433,9 @@ function stopCast() {
   document.getElementById('cropInfo').style.display = 'none';
   document.title = 'Teleprompter Mirror';
   status('Stopped.', '');
-  fetch('/reset', {method: 'POST'});
+  signalRequest('/reset', {method: 'POST'}).catch(err => {
+    console.error('Could not clear signaling after stop:', err);
+  });
 }
 
 // ─── Crop ────────────────────────────────────────────────

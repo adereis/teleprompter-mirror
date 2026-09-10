@@ -79,10 +79,15 @@ Keep the three in sync.
   Uses `replaceTrack()` to switch between direct and cropped streams without
   reconnecting. Crop adds a canvas step to the pipeline; when disabled, the
   stream goes direct (no extra latency). Page title reflects connection state.
+  A connection attempt owns its peer and AbortController; stale asynchronous
+  results cannot modify a replacement peer. A retry task belongs to the capture
+  that started it and is invalidated by Stop. HTTP failures trigger backoff.
 - `view.html` — Tablet-side. Receives WebRTC stream and displays it fullscreen with
   horizontal flip (`scaleX(-1)` for teleprompter mirror effect). Sets
   `jitterBufferTarget=0` to minimize receive-side buffering on USB. Requests
   Screen Wake Lock to keep the tablet on. Auto-reconnects on disconnect.
+  A single retry loop owns negotiation and disconnection cleanup, including
+  removing resize listeners. Failed SDP or HTTP operations re-enter that loop.
 - `latency-test.html` — Visual latency measurement. Displays a millisecond clock
   that can be shared to the tablet; photograph both screens to measure delay.
 - `open-cast.sh` — Opens `/cast` in Chrome's `--app` mode (standalone window,
@@ -200,6 +205,9 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   runs them plus `py_compile`, `bash -n`, and required `shellcheck`. Each failed
   check propagates a nonzero exit status; temporary fixtures use `~/tmp`.
   There's no CI — run it locally.
+- `tests/browser.test.js` runs the inline page scripts in Node.js VM contexts
+  with controlled peers, fetches, and timers. It covers reconnects, cancellation,
+  and stale asynchronous work, without npm packages or live media hardware.
 - `app/mirror-server.py` and `camera/camera-control.py` have hyphens, so they
   can't be imported normally. `tests/loader.py` loads them by path via
   `importlib` and puts `lib/` on `sys.path` so `import teleprompter_config`

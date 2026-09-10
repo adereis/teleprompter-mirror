@@ -57,59 +57,78 @@ function sendViewport(ch) {
 }
 
 async function connect() {
-  let offer = null;
-  while (!offer) {
+  while (true) {
+    let conn = null;
+    const resizeListeners = [];
     try {
-      const res = await fetch('/offer');
-      if (res.ok && res.status === 200) offer = await res.json();
-    } catch (e) {}
-    if (!offer) await new Promise(r => setTimeout(r, 500));
-  }
+      let offer = null;
+      while (!offer) {
+        const res = await fetch('/offer');
+        if (!res.ok) throw new Error(`Offer request failed (${res.status})`);
+        if (res.status === 200) offer = await res.json();
+        if (!offer) await new Promise(r => setTimeout(r, 500));
+      }
 
-  overlay.querySelector('span').textContent = 'Connecting…';
+      overlay.querySelector('span').textContent = 'Connecting…';
 
-  pc = new RTCPeerConnection({
-    iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
-  });
+      conn = new RTCPeerConnection({
+        iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+      });
+      pc = conn;
 
-  pc.ontrack = (e) => {
-    video.srcObject = e.streams[0];
-    video.style.display = 'block';
-    overlay.classList.add('hidden');
-    // Minimize jitter buffer — USB tethering has near-zero jitter
-    const recv = pc.getReceivers().find(r => r.track?.kind === 'video');
-    if (recv && recv.jitterBufferTarget !== undefined) recv.jitterBufferTarget = 0;
-  };
+      conn.ontrack = (e) => {
+        video.srcObject = e.streams[0];
+        video.style.display = 'block';
+        overlay.classList.add('hidden');
+        // Minimize jitter buffer — USB tethering has near-zero jitter
+        const recv = conn.getReceivers().find(r => r.track?.kind === 'video');
+        if (recv && recv.jitterBufferTarget !== undefined) recv.jitterBufferTarget = 0;
+      };
 
+      conn.ondatachannel = (e) => {
+        const ch = e.channel;
+        ch.onopen = () => sendViewport(ch);
+        const onResize = () => sendViewport(ch);
+        window.addEventListener('resize', onResize);
+        resizeListeners.push(onResize);
+      };
 
-  pc.ondatachannel = (e) => {
-    const ch = e.channel;
-    ch.onopen = () => sendViewport(ch);
-    window.addEventListener('resize', () => sendViewport(ch));
-  };
+      const disconnected = new Promise(resolve => {
+        conn.onconnectionstatechange = () => {
+          if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') resolve();
+        };
+      });
 
-  pc.onconnectionstatechange = () => {
-    const s = pc.connectionState;
-    if (s === 'disconnected' || s === 'failed') {
+      await conn.setRemoteDescription(offer);
+      const answer = await conn.createAnswer();
+      await conn.setLocalDescription(answer);
+      await waitForIce(conn);
+
+      const res = await fetch('/answer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(conn.localDescription)
+      });
+      if (!res.ok) throw new Error(`Answer request failed (${res.status})`);
+      await disconnected;
+    } catch (err) {
+      console.error('Viewer connection failed; retrying:', err);
+    } finally {
+      for (const listener of resizeListeners) window.removeEventListener('resize', listener);
+      if (conn) {
+        conn.onconnectionstatechange = null;
+        conn.ontrack = null;
+        conn.ondatachannel = null;
+        conn.close();
+      }
+      pc = null;
+      video.srcObject = null;
       overlay.querySelector('span').textContent = 'Waiting for cast…';
       overlay.classList.remove('hidden');
       video.style.display = 'none';
-      if (pc) pc.close();
-      pc = null;
-      setTimeout(connect, 1000);
     }
-  };
-
-  await pc.setRemoteDescription(offer);
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  await waitForIce(pc);
-
-  await fetch('/answer', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(pc.localDescription)
-  });
+    await new Promise(r => setTimeout(r, 1000));
+  }
 }
 
 connect();
