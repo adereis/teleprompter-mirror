@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=../lib/config.sh
 . "$PROJECT_DIR/lib/config.sh"
+# shellcheck source=../lib/usb.sh
+. "$PROJECT_DIR/lib/usb.sh"
 PORT="$TELEPROMPTER_PORT"
 
 setup_usb() {
@@ -24,7 +26,7 @@ setup_usb() {
     adb shell svc usb setFunctions rndis,adb 2>/dev/null || true
     sleep 5
 
-    USB_IF=$(ip -o link show 2>/dev/null | grep -oP '(usb\d+|enp\S+|enx\S+)(?=:)' | head -1)
+    USB_IF=$(find_tablet_interface)
 
     if [ -z "$USB_IF" ]; then
         echo "ADB USB function switch didn't work — opening tethering settings on tablet..."
@@ -35,7 +37,7 @@ setup_usb() {
 
     echo "Waiting for USB network interface..."
     for _ in $(seq 1 15); do
-        USB_IF=$(ip -o link show 2>/dev/null | grep -oP '(usb\d+|enp\S+|enx\S+)(?=:)' | head -1)
+        USB_IF=$(find_tablet_interface)
         if [ -n "$USB_IF" ]; then
             break
         fi
@@ -50,23 +52,27 @@ setup_usb() {
     echo "USB interface: $USB_IF"
 
     # Ensure the NM profile won't steal the default route
-    local conn
-    conn=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
-           | grep "$USB_IF" | cut -d: -f1) || true
-    if [ -z "$conn" ]; then
-        # Wait for NM to activate the connection
-        sleep 2
-        conn=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
-               | grep "$USB_IF" | cut -d: -f1) || true
+    local conn conn_uuid
+    for _ in $(seq 1 15); do
+        conn_uuid=$(nmcli -g GENERAL.CON-UUID device show "$USB_IF")
+        if [ -n "$conn_uuid" ] && [ "$conn_uuid" != "--" ]; then break; fi
+        sleep 1
+    done
+    if [ -z "$conn_uuid" ] || [ "$conn_uuid" = "--" ]; then
+        echo "NetworkManager did not activate the tablet connection." >&2
+        return 1
     fi
-    if [ -n "$conn" ]; then
-        nmcli connection modify "$conn" ipv4.never-default yes ipv6.never-default yes 2>/dev/null
-        echo "Set never-default on '$conn'"
-    fi
+    conn=$(nmcli -e no -g connection.id connection show uuid "$conn_uuid")
+    case "$conn" in
+        "Wired connection"*) ;;
+        *) echo "Refusing to change named connection '$conn'." >&2; return 1 ;;
+    esac
+    nmcli connection modify uuid "$conn_uuid" ipv4.never-default yes ipv6.never-default yes
+    echo "Set never-default on '$conn'"
 
     # Trust USB interface for WebRTC media (UDP)
-    sudo firewall-cmd --zone=trusted --change-interface="$USB_IF" 2>/dev/null \
-        && echo "Firewall: $USB_IF → trusted zone"
+    sudo firewall-cmd --zone=trusted --change-interface="$USB_IF"
+    echo "Firewall: $USB_IF → trusted zone"
 
     # Wait for IP assignment
     for _ in $(seq 1 5); do
@@ -77,7 +83,8 @@ setup_usb() {
     echo "USB IP: ${USB_IP:-not assigned yet}"
 
     # Set up ADB reverse for signaling fallback
-    adb reverse "tcp:$PORT" "tcp:$PORT" 2>/dev/null && echo "ADB reverse: localhost:$PORT → laptop"
+    adb reverse "tcp:$PORT" "tcp:$PORT"
+    echo "ADB reverse: localhost:$PORT → laptop"
 }
 
 case "${1:-}" in

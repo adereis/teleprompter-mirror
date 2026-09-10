@@ -11,15 +11,19 @@ ACTION="$2"
 # Name check alone isn't enough: Thunderbolt dock ethernet also starts as
 # "Wired connection N" before being renamed — the driver check prevents
 # poisoning its routing with never-default.
-CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep "$IFACE" | cut -d: -f1)
+CONN="${CONNECTION_ID:-}"
 case "$CONN" in "Wired connection"*) ;; *) exit 0 ;; esac
 DRIVER=$(basename "$(readlink "/sys/class/net/$IFACE/device/driver" 2>/dev/null)" 2>/dev/null)
 case "$DRIVER" in rndis_host|cdc_ether) ;; *) exit 0 ;; esac
+VENDOR=$(cat "/sys/class/net/$IFACE/device/../idVendor") || exit 1
+PRODUCT=$(cat "/sys/class/net/$IFACE/device/../idProduct") || exit 1
+[ "$VENDOR:$PRODUCT" = "04e8:6864" ] || exit 0
 
 logger -t teleprompter "Tablet tethering on $IFACE ($CONN) — configuring"
 
 # Fix routing so USB tethering doesn't steal the default route
-nmcli connection modify "$CONN" ipv4.never-default yes ipv6.never-default yes 2>/dev/null
+nmcli connection modify uuid "${CONNECTION_UUID:?Missing NetworkManager connection UUID}" \
+    ipv4.never-default yes ipv6.never-default yes || exit 1
 ip route del default dev "$IFACE" 2>/dev/null
 logger -t teleprompter "Set never-default on '$CONN'"
 

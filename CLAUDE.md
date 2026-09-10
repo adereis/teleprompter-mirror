@@ -18,6 +18,7 @@ gives their home directory:
 app/        mirror-server.py, cast.html, view.html, latency-test.html, icon.svg, manifest.json
 camera/     camera-control.py
 lib/        config.sh, teleprompter_config.py        (shared config)
+            usb.sh                                 (tablet interface discovery)
 bin/        start-mirror.sh, open-cast.sh            (user launchers)
 system/     install.sh, uninstall.sh, *.desktop, wifi-rebind.sh
             udev/ *.rules · systemd/ *.service
@@ -93,7 +94,13 @@ Keep the three in sync.
   error dialog if the server isn't running.
 - `start-mirror.sh` — One-command USB tethering + server startup. Supports
   `usb` (full setup), `reconnect` (re-enable USB without restarting server),
-  and no-argument (server only) modes.
+  and no-argument (server only) modes. `lib/usb.sh` selects the interface by
+  driver (`rndis_host` or `cdc_ether`) and USB identity (`04e8:6864`), rejects
+  ambiguous matches, and tolerates no match while USB modes change.
+  Before routing/firewall changes, the launcher
+  checks the active profile name and modifies it by UUID. The NM dispatcher
+  uses its event's connection ID/UUID, avoiding substring and duplicate-name
+  matches against unrelated active profiles.
 - `teleprompter-mirror.service` — systemd user service template. Installed to
   `~/.config/systemd/user/` by `install.sh`. Auto-starts the mirror server at
   login (`WantedBy=graphical-session.target`), restarts on failure, stops on
@@ -110,10 +117,12 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - `99-teleprompter` — NetworkManager dispatcher. Fires when `usb0` comes up
   after tethering is enabled. Fixes routing (never-default), firewall (trusted
   zone), and ADB reverse port forwarding. No user action needed. Uses a
-  dual-check filter: connection name must match `"Wired connection"*` AND
+  filter: connection name must match `"Wired connection"*` AND
   the network driver must be `rndis_host` or `cdc_ether` (Android USB
-  tethering). The driver check prevents poisoning Thunderbolt dock ethernet,
-  which also auto-creates as `"Wired connection N"` before being renamed.
+  tethering), with USB identity `04e8:6864` matching the tethering udev rule.
+  The identity check also excludes ordinary `cdc_ether` dongles. This prevents
+  poisoning Thunderbolt dock ethernet, which also auto-creates as
+  `"Wired connection N"` before being renamed.
 - `99-teleprompter-camera` — NetworkManager dispatcher. Acts on `up` (runs
   `camera-control.py reconnect`, which waits for the camera to answer then
   applies the same NotReady gate as `start`), `down`
@@ -316,12 +325,13 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   the HDMI capture's `priority.session` above the built-in camera so the
   external camera is preferred. Both cameras remain available in app dropdowns.
 - The `99-teleprompter` NM dispatcher must only match tablet USB tethering
-  connections, not all USB ethernet. It uses a dual-check filter: NM connection
-  name (`Wired connection *`) AND network driver (`rndis_host` or `cdc_ether`).
+  connections, not all USB ethernet. It checks the NM connection
+  name (`Wired connection *`), network driver (`rndis_host` or `cdc_ether`),
+  and Samsung tethering USB identity (`04e8:6864`).
   Connection name alone is insufficient — Thunderbolt dock ethernet also
   auto-creates as `"Wired connection N"` and would get `never-default yes` set
-  on it, breaking internet connectivity. The driver check is authoritative:
-  only Android USB tethering uses `rndis_host`/`cdc_ether`.
+  on it, breaking internet connectivity. The USB identity is necessary because
+  ordinary Ethernet devices can also use `cdc_ether`.
 
 ## Security and privacy rules
 
@@ -364,10 +374,12 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
   it never becomes a route to the internet.
 ### Dispatcher and system hooks
 
-- **Match tablet connections by NM connection name AND network driver.** Name
+- **Match tablet connections by NM connection name, driver, and USB identity.** Name
   alone (`Wired connection *`) is ambiguous — Thunderbolt dock ethernet also
   auto-creates with that name. The driver check (`rndis_host` or `cdc_ether`)
-  is authoritative for Android USB tethering.
+  plus the Samsung tethering USB identity (`04e8:6864`) selects this tablet.
+  Keep that identity in `lib/usb.sh`, the dispatcher, and the tethering udev
+  rule synchronized when adapting the project to different hardware.
 - **Never set `never-default` or change firewall zones** on named connection
   profiles (like `Ethernet`). Only auto-created `Wired connection N` profiles
   with a tethering driver should be modified by dispatchers.
