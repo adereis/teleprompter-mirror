@@ -5,6 +5,7 @@ endpoint from the UPnP device descriptor XML is pure and worth pinning down —
 it's how the script finds the camera when SSDP succeeds.
 """
 
+import types
 import unittest
 
 from loader import load_module
@@ -95,6 +96,87 @@ class ParseCameraStateTest(unittest.TestCase):
         # Zoom present but no cameraStatus object -> status None, zoom found.
         only_zoom = [{"type": "zoomInformation", "zoomPosition": 12}]
         self.assertEqual(cam.parse_camera_state(only_zoom), (None, 12))
+
+
+class RecoveryGatingTest(unittest.TestCase):
+    """Both `start` and `reconnect` must restore zoom only when the camera
+    actually reset (NotReady). A brief RF drop leaves the camera IDLE with its
+    zoom intact; restoring then clobbers a good setting — the exact bug that
+    stranded the A6300 at 100/100 after a WiFi flap."""
+
+    def setUp(self):
+        self._orig_api = cam.api_call
+        self._orig_restore = cam.restore_zoom
+        self.restored = []
+        cam.restore_zoom = lambda ep: self.restored.append(ep) or True
+
+    def tearDown(self):
+        cam.api_call = self._orig_api
+        cam.restore_zoom = self._orig_restore
+
+    def _install_api(self, event):
+        """Fake api_call: getEvent returns `event`, everything else returns []."""
+        self.methods = []
+
+        def fake(endpoint, method, params=None, **kwargs):
+            self.methods.append(method)
+            return event if method == "getEvent" else []
+
+        cam.api_call = fake
+
+    def test_start_skips_restore_when_idle(self):
+        self._install_api(make_event("IDLE", 38))
+        cam.cmd_start("EP")
+        self.assertEqual(self.restored, [])
+        self.assertNotIn("startRecMode", self.methods)
+
+    def test_start_restores_when_notready(self):
+        self._install_api(make_event("NotReady", 0))
+        cam.cmd_start("EP")
+        self.assertEqual(self.restored, ["EP"])
+        self.assertIn("startRecMode", self.methods)
+
+    def test_reconnect_skips_restore_when_idle(self):
+        # The incident: WiFi flap, camera still IDLE with a good zoom.
+        self._install_api(make_event("IDLE", 38))
+        cam.cmd_reconnect("EP")
+        self.assertEqual(self.restored, [])
+        self.assertNotIn("startRecMode", self.methods)
+
+    def test_reconnect_restores_when_notready(self):
+        self._install_api(make_event("NotReady", 0))
+        cam.cmd_reconnect("EP")
+        self.assertEqual(self.restored, ["EP"])
+        self.assertIn("startRecMode", self.methods)
+
+
+class RestoreZoomTest(unittest.TestCase):
+    """restore_zoom must reject an implausibly high final position (the 'stop'
+    arrived late and the lens over-ran) and retry, rather than reporting the
+    over-run as a successful restore."""
+
+    def setUp(self):
+        self._orig = (cam.zoom_to_zero, cam.zoom_timed, cam.time)
+        # Stub timing so the backoff loop doesn't actually sleep.
+        cam.time = types.SimpleNamespace(sleep=lambda *_: None, monotonic=lambda: 0.0)
+        cam.zoom_to_zero = lambda ep: True
+
+    def tearDown(self):
+        cam.zoom_to_zero, cam.zoom_timed, cam.time = self._orig
+
+    def test_rejects_overshoot_then_succeeds(self):
+        # First attempt overshoots past the ceiling; second lands at a sane pos.
+        results = iter([100, 38])
+        cam.zoom_timed = lambda ep, d, dur: next(results)
+        self.assertTrue(cam.restore_zoom("EP"))
+
+    def test_gives_up_after_persistent_overshoot(self):
+        cam.zoom_timed = lambda ep, d, dur: 100  # always over-runs
+        self.assertFalse(cam.restore_zoom("EP"))
+
+    def test_accepts_sane_position(self):
+        cam.zoom_timed = lambda ep, d, dur: 38
+        self.assertTrue(cam.restore_zoom("EP"))
 
 
 class ConfigWiringTest(unittest.TestCase):

@@ -12,11 +12,11 @@ Usage:
     camera-control.py zoom in start     # Continuous zoom in (send 'stop' to end)
     camera-control.py zoom stop         # Stop continuous zoom
     camera-control.py zoom in 3s        # Smooth zoom in for 3 seconds
-    camera-control.py zoom set [SEC]    # Zoom out fully, then in for SEC (default: 0.9)
+    camera-control.py zoom set [SEC]    # Zoom out fully, then in for SEC (default: 1.2s)
     camera-control.py refocus           # Nudge zoom in/out to trigger AF-C refocus
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
-    camera-control.py reconnect         # Wait for camera after WiFi drop, restore zoom
+    camera-control.py reconnect         # Wait for camera after WiFi drop, recover if reset
     camera-control.py start             # startRecMode + zoom restore, only if camera reset
     camera-control.py keepalive         # Poll camera every 10s to prevent WiFi idle kick
 """
@@ -45,7 +45,28 @@ DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
 DEFAULT_ZOOM_DURATION = 1.2
 KEEPALIVE_INTERVAL = 10  # seconds between read-only getEvent polls
 
+# Timed zoom control assumes actZoom start/stop commands round-trip quickly: the
+# motor runs for the wall-clock gap between them. Over a degraded camera link
+# those calls can block for seconds (2-7s observed during a weak-signal
+# reconnect), so the motor runs uncontrolled and overshoots. Treat any actZoom
+# slower than this as "timing unreliable" and abort the move rather than trust it.
+ZOOM_LATENCY_LIMIT = 2.0  # seconds
+# A restore zooms fully out then in for DEFAULT_ZOOM_DURATION (~38/100 on the
+# E PZ 16-50mm). A final position far above that means the 'stop' command was
+# delayed and the lens over-ran (stranded at 100/100 in the wild). Reject such a
+# result and retry instead of reporting it as a successful restore.
+ZOOM_RESTORE_CEILING = 75
+
 log = logging.getLogger("camera-control")
+
+
+class ZoomTimingError(RuntimeError):
+    """Timed zoom control was unreliable — link too slow, or result implausible.
+
+    Raised by the timed-zoom helpers so callers (restore_zoom's backoff loop,
+    interactive `zoom set`) can retry or fail cleanly instead of trusting a
+    duration that no longer maps to actual motor runtime.
+    """
 
 
 def _init_logging():
@@ -208,11 +229,32 @@ def cmd_zoom(endpoint, direction, movement="1shot"):
     print(f"Zoom {direction} {movement}: OK")
 
 
+def _actzoom(endpoint, direction, phase):
+    """Send one actZoom command; return its round-trip latency in seconds."""
+    t0 = time.monotonic()
+    api_call(endpoint, "actZoom", [direction, phase])
+    return time.monotonic() - t0
+
+
 def zoom_timed(endpoint, direction, duration):
-    """Zoom in/out for a duration. Returns final position. Only 2 API calls."""
-    api_call(endpoint, "actZoom", [direction, "start"])
-    time.sleep(duration)
-    api_call(endpoint, "actZoom", [direction, "stop"])
+    """Zoom for `duration` seconds and return the final position.
+
+    Timed control only works if the actZoom start/stop commands round-trip
+    quickly — the motor runs for the wall-clock gap between them. Measure each
+    command and raise ZoomTimingError if it exceeds ZOOM_LATENCY_LIMIT so the
+    caller can back off instead of trusting a duration that no longer reflects
+    motor runtime. On a slow start the motor is already running uncontrolled, so
+    stop it immediately (skip the hold) to limit the over-run before raising.
+    """
+    start_rtt = _actzoom(endpoint, direction, "start")
+    if start_rtt <= ZOOM_LATENCY_LIMIT:
+        time.sleep(duration)
+    stop_rtt = _actzoom(endpoint, direction, "stop")
+    worst = max(start_rtt, stop_rtt)
+    if worst > ZOOM_LATENCY_LIMIT:
+        raise ZoomTimingError(
+            f"actZoom {direction} RTT {worst:.1f}s > {ZOOM_LATENCY_LIMIT}s "
+            "— timed control unreliable")
     time.sleep(0.3)
     return get_zoom_position(endpoint)
 
@@ -221,8 +263,13 @@ def cmd_zoom_set(endpoint, duration=None):
     """Zoom out fully, then zoom in for DEFAULT_ZOOM_DURATION."""
     if duration is None:
         duration = DEFAULT_ZOOM_DURATION
-    zoom_timed(endpoint, "out", 10)
-    pos = zoom_timed(endpoint, "in", duration)
+    try:
+        zoom_timed(endpoint, "out", 10)
+        pos = zoom_timed(endpoint, "in", duration)
+    except ZoomTimingError as e:
+        print(f"Camera link too slow to set zoom precisely: {e}")
+        print("Try again once the WiFi link settles (check 'iw dev wlan0 link').")
+        sys.exit(1)
     print(f"Zoom set to {pos}/100")
 
 
@@ -274,30 +321,52 @@ def zoom_to_zero(endpoint):
 
 
 def restore_zoom(endpoint):
-    """Reset zoom to default with fibonacci-style backoff. Returns True on success."""
+    """Reset zoom to default with fibonacci-style backoff. Returns True on success.
+
+    Each attempt zooms fully out then in for DEFAULT_ZOOM_DURATION. The backoff
+    gives a still-settling link time to recover: a slow actZoom raises
+    ZoomTimingError, an unreachable camera raises SystemExit, and an implausibly
+    high final position (the 'stop' arrived late and the lens over-ran) is
+    rejected too — all three just trigger the next, longer retry rather than
+    leaving the lens parked at the wrong focal length.
+    """
     elapsed = 0
     for i, delay in enumerate(ZOOM_RETRY_DELAYS):
         time.sleep(delay)
         elapsed += delay
+        attempt = f"attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s"
         try:
-            zoom_to_zero(endpoint)
+            if not zoom_to_zero(endpoint):
+                raise ZoomTimingError("could not reach zoom 0")
             pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
-            print(f"Zoom restored to {pos}/100 (attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s)")
+            if pos > ZOOM_RESTORE_CEILING:
+                raise ZoomTimingError(f"overshot to {pos}/100 (stop delayed)")
+            print(f"Zoom restored to {pos}/100 ({attempt})")
             return True
+        except ZoomTimingError as e:
+            print(f"Zoom not ready ({attempt}): {e}")
         except SystemExit:
-            print(f"Zoom not ready (attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s)")
+            print(f"Zoom not ready ({attempt})")
     print(f"Zoom restore failed after {len(ZOOM_RETRY_DELAYS)} attempts ({elapsed}s)")
     return False
 
 
 def cmd_reconnect(endpoint):
-    """Wait for camera after WiFi reconnect, start rec mode, restore zoom."""
+    """Wait for the camera after a WiFi reconnect, then recover iff it reset.
+
+    The `up` dispatcher calls this the moment camera WiFi comes up, when the
+    camera may not answer yet — so poll (probing with a read-only getEvent) up
+    to max_wait seconds. Once reachable, delegate to the same self-gating logic
+    as `start`: only a camera that actually reset to NotReady gets startRecMode +
+    zoom restore. Previously this restored zoom unconditionally, which corrupted
+    a perfectly good zoom on every brief RF flap — and, because a reconnect rides
+    in on a still-weak link, the timed restore could strand the lens at 100/100.
+    """
     max_wait = 30
-    for attempt in range(max_wait // 2):
-        result = api_call(endpoint, "startRecMode", exit_on_error=False)
+    for _ in range(max_wait // 2):
+        result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
         if result is not None:
-            print("Camera connected, rec mode started.")
-            restore_zoom(endpoint)
+            _recover_if_reset(endpoint, result)
             return
         time.sleep(2)
     print(f"Camera not reachable after {max_wait}s")
@@ -326,6 +395,24 @@ def parse_camera_state(result):
     return status, zoom
 
 
+def _recover_if_reset(endpoint, result):
+    """Run startRecMode + zoom restore only if the camera reports NotReady.
+
+    Shared by `start` and `reconnect`. A brief RF drop leaves Smart Remote
+    running — the camera stays IDLE with its zoom intact — so recovery must be
+    gated on the camera having actually reset (e.g. a power-loss drop). Restoring
+    unconditionally clobbers a good zoom; over the still-weak link a reconnect
+    rides in on, the timed restore can even drive the lens to 100/100.
+    """
+    status, zoom = parse_camera_state(result)
+    if status == "NotReady":
+        api_call(endpoint, "startRecMode", exit_on_error=False)
+        print("Camera was NotReady — recovering")
+        restore_zoom(endpoint)
+    else:
+        print(f"Camera status: {status} (zoom: {zoom}) — no recovery needed")
+
+
 def cmd_start(endpoint):
     """Check camera state; start rec mode only if the camera reset.
 
@@ -337,13 +424,7 @@ def cmd_start(endpoint):
     if result is None:
         print("Camera not reachable.")
         sys.exit(1)
-    status, zoom = parse_camera_state(result)
-    if status == "NotReady":
-        api_call(endpoint, "startRecMode", exit_on_error=False)
-        print("Camera was NotReady — recovering")
-        restore_zoom(endpoint)
-    else:
-        print(f"Camera status: {status} (zoom: {zoom}) — no recovery needed")
+    _recover_if_reset(endpoint, result)
 
 
 def cmd_keepalive(endpoint):

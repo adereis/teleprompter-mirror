@@ -115,12 +115,18 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   tethering). The driver check prevents poisoning Thunderbolt dock ethernet,
   which also auto-creates as `"Wired connection N"` before being renamed.
 - `99-teleprompter-camera` — NetworkManager dispatcher. Acts on `up` (runs
-  `camera-control.py reconnect` to re-initialize Smart Remote), `down`
+  `camera-control.py reconnect`, which waits for the camera to answer then
+  applies the same NotReady gate as `start`), `down`
   (logs disconnection), and `dhcp4-change` (logs WiFi station metrics from
   `iw` for retrospective analysis). On `dhcp4-change` it then runs
-  `camera-control.py start`, which is self-gating: it checks camera status via
-  `getEvent` and only calls `startRecMode` (+ zoom restore) if the camera is in
-  NotReady (brief WiFi blips may not reset Smart Remote). This replaced an
+  `camera-control.py start`. Both `reconnect` and `start` are self-gating: they
+  check camera status via
+  `getEvent` and only call `startRecMode` (+ zoom restore) if the camera is in
+  NotReady (brief WiFi blips may not reset Smart Remote). `reconnect` used to
+  restore zoom unconditionally, which corrupted a good zoom on every brief RF
+  flap — worse, a reconnect rides in on a still-weak link, and the timed zoom
+  restore over that link stranded the lens at 100/100 (see the timed-zoom gotcha
+  below). Gating both paths on actual camera state fixes this. This replaced an
   earlier heuristic that grepped the kernel log for a `disassociated` line —
   that missed power-loss drops, which log `authentication timed out` instead of
   a disassociation and so left the camera stuck in NotReady. Verifying actual
@@ -278,6 +284,17 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   ended in a Reason 2/3 drop, then flat again 50→51 over the following 10h. (An
   earlier note that this field is stuck at a fixed 88 no longer holds — likely a
   prior driver version; verify on the running kernel before trusting old values.)
+- **Timed zoom control is only valid over a fast link.** `actZoom` is a
+  fire-and-forget start/stop pair; `zoom_timed` runs the motor for the
+  wall-clock gap between them, so it assumes each call round-trips in ~100ms.
+  Over a degraded camera link those calls block for seconds (2-7s seen during a
+  weak-signal reconnect at -84 dBm), the motor runs uncontrolled, and the lens
+  overshoots — once stranding it at 100/100 while the code logged "Zoom
+  restored". Guards: `zoom_timed` raises `ZoomTimingError` when an `actZoom`
+  exceeds `ZOOM_LATENCY_LIMIT` (2s), and `restore_zoom` rejects a final position
+  above `ZOOM_RESTORE_CEILING` (75) and retries with backoff — letting the link
+  settle rather than mis-actuating. If `zoom set` reports "link too slow", check
+  `iw dev wlan0 link` / signal and retry once the link recovers.
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
