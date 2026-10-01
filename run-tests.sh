@@ -22,8 +22,22 @@ node tests/browser.test.js
 
 echo
 echo "== Python byte-compile =="
-python3 -m py_compile app/mirror-server.py camera/camera-control.py lib/teleprompter_config.py
+python3 -m py_compile app/mirror-server.py camera/camera-control.py \
+    lib/teleprompter_config.py lib/window_focus.py system/extension-state.py
 echo "ok"
+
+echo
+echo "== GNOME extension syntax (node --check) =="
+# The extension only ever runs inside gnome-shell, where a syntax error
+# surfaces as "extension failed to load" at the next login. Parse it here
+# instead. Node 22 detects the ES module syntax on its own.
+ext_js="system/gnome-extension/teleprompter-focus@teleprompter-mirror.local/extension.js"
+# Guarded because the check runner's own tests run this script against a
+# fixture tree that holds nothing but run-tests.sh.
+if [ -f "$ext_js" ]; then
+    node --check "$ext_js"
+    echo "  ok: $ext_js"
+fi
 
 echo
 echo "== Shell syntax (bash -n) =="

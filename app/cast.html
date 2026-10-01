@@ -59,6 +59,20 @@
   .crop-btn:hover { background: #3d6a32; }
   .crop-btn.active { background: #4ecca3; color: #1a1a2e; }
   #cropInfo { font-size: 13px; color: #4ecca3; display: none; }
+  .sub-link {
+    color: #888; font-size: 12px; text-decoration: none;
+    border-bottom: 1px dotted #555; align-self: flex-start;
+  }
+  .sub-link:hover { color: #4ecca3; }
+  #focusInfo { font-size: 13px; display: none; }
+  #windowPicker {
+    display: none; flex-direction: column; gap: 4px;
+    max-height: 40vh; overflow-y: auto;
+  }
+  #windowPicker button {
+    text-align: left; font-size: 12px; padding: 6px 8px; background: #16213e;
+  }
+  #windowPicker .app { display: block; color: #4ecca3; font-size: 11px; }
   #status { font-size: 14px; }
   .ok { color: #4ecca3; }
   .wait { color: #f0a500; }
@@ -86,7 +100,12 @@
       <button id="stopBtn" onclick="stopCast()" disabled>Stop</button>
       <button id="cropBtn" class="crop-btn" onclick="toggleCrop()" style="display:none">Crop</button>
       <button id="resetCropBtn" onclick="resetCrop()" style="display:none">Reset Crop</button>
+      <button id="focusBtn" onclick="focusShared()">Focus Shared</button>
     </div>
+    <div id="focusTarget" class="sub"></div>
+    <a href="#" class="sub-link" onclick="togglePicker(); return false;">choose shared window…</a>
+    <div id="focusInfo"></div>
+    <div id="windowPicker"></div>
     <div id="cropInfo"></div>
     <div id="status"></div>
     <div id="stats"></div>
@@ -219,11 +238,25 @@ async function startCast() {
   try {
     status('Opening window picker…', 'wait');
 
+    // Started before the picker opens — whatever is focused now is this
+    // window — but deliberately not awaited: getDisplayMedia() needs the
+    // transient activation from the click, and that expires in five seconds.
+    // A slow or wedged focus bridge must never cost us the ability to cast.
+    const castWindow = focusedWindowId();
+    // Chrome focuses the captured tab/window at capture start by default;
+    // asking explicitly makes that dependable enough to detect.
+    const controller = window.CaptureController ? new CaptureController() : undefined;
+
     capture = await navigator.mediaDevices.getDisplayMedia({
       video: {cursor: 'always', frameRate: {ideal: 30, max: 30}},
-      audio: false
+      audio: false,
+      controller
     });
     stream = capture;
+    if (controller) {
+      // Only valid in this task — it throws once a frame has been delivered.
+      try { controller.setFocusBehavior('focus-captured-surface'); } catch (err) { /* too late */ }
+    }
 
     selecting = false;
     window.removeEventListener('focus', onFocus);
@@ -237,6 +270,14 @@ async function startCast() {
     const vtrack = stream.getVideoTracks()[0];
     vtrack.onended = () => stopCast();
     vtrack.contentHint = 'motion';
+
+    // Not awaited: connecting to the tablet matters more than bookkeeping.
+    // The task owns this capture, so Stop or a replacement invalidates it.
+    adoptionTask?.abort();
+    const task = new AbortController();
+    adoptionTask = task;
+    adoptSharedWindow(vtrack, castWindow, capture, task)
+      .catch(err => console.error('Could not identify the shared window:', err));
 
     await connect();
   } catch (err) {
@@ -418,6 +459,8 @@ function stopCast() {
   reconnecting = null;
   if (connectionAttempt) connectionAttempt.abort();
   connectionAttempt = null;
+  adoptionTask?.abort();
+  adoptionTask = null;
   disableCrop();
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
@@ -437,6 +480,205 @@ function stopCast() {
     console.error('Could not clear signaling after stop:', err);
   });
 }
+
+// ─── Focus the shared window ─────────────────────────────
+//
+// The page cannot raise the captured window itself: Chrome's focus API is only
+// valid at the instant capture starts, and nothing in the browser is told
+// which window the portal handed over. The server asks a GNOME Shell
+// extension instead, and the target is worked out from the focus change
+// Chrome makes at capture start (see adoptSharedWindow), with the picker as
+// the manual override. It is remembered server-side, so the desktop entry's
+// action and a keyboard shortcut raise the same window as this button.
+
+const picker = document.getElementById('windowPicker');
+const FOCUS_TIMEOUT_MS = 3000;
+let adoptionTask = null;   // AbortController owned by the running adoption
+let targetChoice = 0;      // bumped by every manual pick, to invalidate one
+
+function focusInfo(msg, cls) {
+  const el = document.getElementById('focusInfo');
+  el.textContent = msg || '';
+  el.className = cls || '';
+  el.style.display = msg ? 'block' : 'none';
+}
+
+/** Bound every focus request: the bridge waits on gnome-shell, which can hang. */
+function focusSignal(external) {
+  const deadline = AbortSignal.timeout?.(FOCUS_TIMEOUT_MS);
+  if (!external) return deadline;
+  if (!deadline || !AbortSignal.any) return external;
+  return AbortSignal.any([external, deadline]);
+}
+
+async function focusJSON(path, options = {}) {
+  const response = await fetch(path, {...options, signal: focusSignal(options.signal)});
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || `${path} failed (${response.status})`);
+  return data;
+}
+
+async function focusShared() {
+  try {
+    const win = await focusJSON('/focus', {method: 'POST', body: '{}'});
+    hidePicker();
+    focusInfo(`Raised ${win.title || win.wm_class}.`, 'ok');
+  } catch (err) {
+    // Nothing remembered yet, or the window is gone — let the user say which.
+    focusInfo(err.message, 'err');
+    await showPicker();
+  }
+}
+
+/** The window that has the shell's focus right now, or null if unknown. */
+async function focusedWindowId(signal) {
+  try {
+    const windows = await focusJSON('/windows', {signal});
+    return windows.find(w => w.focused)?.id ?? null;
+  } catch (err) {
+    return null;  // no extension: auto-detection is simply unavailable
+  }
+}
+
+/**
+ * Work out which window a fresh capture belongs to, and remember it.
+ *
+ * Sharing a window and choosing a focus target are the same decision, so the
+ * share picker has to drive the target — otherwise "Focus Shared" keeps
+ * raising whatever was picked last time. The portal never says what was
+ * captured, but Chrome focuses the captured surface at capture start, so the
+ * window that takes focus away from this one is it. For a shared tab that is
+ * the browser window hosting the tab, which is the best that exists: nothing
+ * outside the browser can raise an individual tab.
+ */
+async function adoptSharedWindow(track, castWindowRequest, capture, task) {
+  // This task belongs to one capture and to the target as it stands now.
+  // Stop, a replacement capture, and a manual pick each invalidate it, so a
+  // slow window lookup can never resurrect an old target later.
+  const choice = targetChoice;
+  const mine = () => adoptionTask === task && !task.signal.aborted &&
+    stream === capture && track.readyState === 'live' && targetChoice === choice;
+
+  const castWindow = await castWindowRequest;
+  if (!mine()) return;
+  if (!castWindow) {
+    // No window list to compare against — usually a missing extension.
+    await refreshFocusTarget();
+    return;
+  }
+  const settings = track.getSettings?.() ?? {};
+  if (settings.displaySurface === 'monitor') {
+    // Nothing specific is being shared, so leave the target alone — it is
+    // still useful for raising the call window out from behind everything.
+    await refreshFocusTarget('Sharing a whole screen');
+    return;
+  }
+  for (let attempt = 0; attempt < 8 && mine(); attempt++) {
+    const focused = await focusedWindowId(task.signal);
+    if (!mine()) return;
+    if (focused && focused !== castWindow) {
+      try {
+        await focusJSON('/focus/target', {method: 'POST', signal: task.signal,
+                                          body: JSON.stringify({id: focused})});
+        if (!mine()) return;
+        await refreshFocusTarget();
+        return;
+      } catch (err) {
+        break;  // the window closed again, or there is no extension
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  // Chrome could not raise the captured surface (on Wayland it cannot raise
+  // another application's window at all), so ask instead of guessing.
+  if (!mine()) return;
+  focusInfo('Which window did you just share?', 'wait');
+  await showPicker(settings);
+}
+
+/** Show what "Focus Shared" will raise, so a stale target is never a surprise. */
+async function refreshFocusTarget(prefix) {
+  const el = document.getElementById('focusTarget');
+  if (!el) return;
+  let target = null;
+  try {
+    target = await focusJSON('/focus/target');
+  } catch (err) {
+    el.textContent = '';
+    return;
+  }
+  const name = target?.title || target?.wm_class;
+  const parts = [];
+  if (prefix) parts.push(prefix);
+  parts.push(name ? `Focus target: ${name}` : 'No focus target picked yet');
+  el.textContent = parts.join(' · ');
+}
+
+function togglePicker() {
+  if (picker.style.display === 'flex') hidePicker();
+  else showPicker();
+}
+
+function hidePicker() {
+  picker.style.display = 'none';
+  picker.replaceChildren();
+}
+
+/**
+ * List the windows to choose from. `captured` (a track's settings) is used
+ * only to order them: the window closest in size to the captured surface is
+ * the likeliest candidate, so it floats to the top.
+ */
+async function showPicker(captured) {
+  let windows;
+  try {
+    windows = await focusJSON('/windows');
+  } catch (err) {
+    focusInfo(err.message, 'err');
+    return;
+  }
+  // The focused window is normally this one, so it sorts last — but it stays
+  // selectable: with /cast open as an ordinary tab, the window hosting the
+  // shared tab is also the focused window, and excluding it left that case
+  // with nothing to pick.
+  const distance = w => (captured?.width && captured?.height)
+    ? Math.abs(w.width - captured.width) + Math.abs(w.height - captured.height)
+    : w.mru;
+  const choices = windows.slice()
+    .sort((a, b) => (a.focused - b.focused) || (distance(a) - distance(b)));
+  picker.replaceChildren();
+  if (!choices.length) {
+    focusInfo('No windows to choose from.', 'err');
+    return;
+  }
+  for (const win of choices) {
+    const button = document.createElement('button');
+    const app = document.createElement('span');
+    app.className = 'app';
+    app.textContent = (win.wm_class || 'window') + (win.focused ? ' · this window' : '');
+    // textContent, not innerHTML: window titles are arbitrary text.
+    button.append(app, document.createTextNode(win.title || '(untitled)'));
+    button.onclick = () => rememberAndFocus(win.id);
+    picker.append(button);
+  }
+  picker.style.display = 'flex';
+}
+
+async function rememberAndFocus(id) {
+  // An explicit choice outranks any adoption still in flight.
+  targetChoice++;
+  adoptionTask?.abort();
+  try {
+    await focusJSON('/focus/target', {method: 'POST', body: JSON.stringify({id})});
+  } catch (err) {
+    focusInfo(err.message, 'err');
+    return;
+  }
+  await refreshFocusTarget();
+  await focusShared();
+}
+
+refreshFocusTarget();
 
 // ─── Crop ────────────────────────────────────────────────
 

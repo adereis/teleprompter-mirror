@@ -7,8 +7,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # the system/ directory (source fi
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"        # repo root (baked into __PROJECT_DIR__)
 TARGET_USER="${SUDO_USER:?Run with sudo, not as root directly}"
 TARGET_HOME="$(eval echo ~"$TARGET_USER")"
+XDG_DIR="/run/user/$(id -u "$TARGET_USER")"
+# Keep in sync with EXTENSION_UUID in lib/window_focus.py and uninstall.sh.
+EXT_UUID="teleprompter-focus@teleprompter-mirror.local"
 
 echo "Installing for user: $TARGET_USER"
+
+# Run a command as the target user with their session bus reachable — needed
+# for anything that talks to GNOME Shell or systemd --user.
+as_user() {
+    runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_DIR/bus" "$@"
+}
 
 # Resolve environment-specific values that must be baked into system files
 # (NetworkManager dispatchers can't read the user's config at runtime). The
@@ -84,11 +94,26 @@ chown "$TARGET_USER:$TARGET_USER" "$USER_SERVICE_DIR/teleprompter-mirror.service
 sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$SCRIPT_DIR/systemd/teleprompter-camera-keepalive.service" \
     > "$USER_SERVICE_DIR/teleprompter-camera-keepalive.service"
 chown "$TARGET_USER:$TARGET_USER" "$USER_SERVICE_DIR/teleprompter-camera-keepalive.service"
-XDG_DIR="/run/user/$(id -u "$TARGET_USER")"
-runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
-    systemctl --user daemon-reload
-runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
-    systemctl --user enable teleprompter-mirror.service
+as_user systemctl --user daemon-reload
+as_user systemctl --user enable teleprompter-mirror.service
+
+echo "Installing GNOME Shell extension..."
+# Window listing and activation are only possible from inside gnome-shell:
+# org.gnome.Shell.Introspect is restricted to the portals and Wayland has no
+# wmctrl. See lib/window_focus.py.
+EXT_SRC="$SCRIPT_DIR/gnome-extension/$EXT_UUID"
+EXT_DIR="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
+# Created as the user so the parent directories are not left owned by root.
+runuser -u "$TARGET_USER" -- mkdir -p "$EXT_DIR"
+install -o "$TARGET_USER" -g "$TARGET_USER" -m 644 -t "$EXT_DIR" \
+    "$EXT_SRC/extension.js" "$EXT_SRC/metadata.json"
+
+# Always go through the settings helper, even when the shell accepted the
+# enable: `gnome-extensions enable` on a shell that does not know the UUID
+# fails, and a UUID left in disabled-extensions would override the enable.
+as_user gnome-extensions enable "$EXT_UUID" 2>/dev/null || true
+as_user python3 "$SCRIPT_DIR/extension-state.py" enable "$EXT_UUID"
+echo "  log out and back in to activate it"
 
 echo ""
 echo "Installed:"
@@ -104,5 +129,9 @@ echo "  NM:      /etc/NetworkManager/dispatcher.d/99-teleprompter-camera"
 echo "  desktop: $DESKTOP_DIR/teleprompter-mirror.desktop"
 echo "  systemd: $USER_SERVICE_DIR/teleprompter-mirror.service (user)"
 echo "  systemd: $USER_SERVICE_DIR/teleprompter-camera-keepalive.service (user, on-demand)"
+echo "  shell:   $EXT_DIR (GNOME extension)"
+echo ""
+echo "The GNOME extension only loads in a fresh session — log out and back in"
+echo "before using \"Focus Shared Window\"."
 echo ""
 echo "To uninstall: sudo $SCRIPT_DIR/uninstall.sh"

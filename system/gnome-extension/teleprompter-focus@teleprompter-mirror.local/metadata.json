@@ -1,0 +1,7 @@
+{
+    "uuid": "teleprompter-focus@teleprompter-mirror.local",
+    "name": "Teleprompter Focus",
+    "description": "Lets the Teleprompter Mirror tools list open windows and raise the one being cast to the tablet",
+    "shell-version": ["48", "49"],
+    "version": 1
+}

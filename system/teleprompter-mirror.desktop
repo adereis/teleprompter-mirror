@@ -5,3 +5,8 @@ Exec=__PROJECT_DIR__/bin/open-cast.sh
 Icon=video-display
 Type=Application
 Categories=Utility;
+Actions=focus-shared;
+
+[Desktop Action focus-shared]
+Name=Focus Shared Window
+Exec=__PROJECT_DIR__/bin/focus-shared.sh

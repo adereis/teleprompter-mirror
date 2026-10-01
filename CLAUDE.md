@@ -19,10 +19,13 @@ app/        mirror-server.py, cast.html, view.html, latency-test.html, icon.svg,
 camera/     camera-control.py
 lib/        config.sh, teleprompter_config.py        (shared config)
             usb.sh                                 (tablet interface discovery)
+            window_focus.py                        (raise the shared window)
 bin/        start-mirror.sh, open-cast.sh            (user launchers)
+            focus-shared.sh
 system/     install.sh, uninstall.sh, *.desktop, wifi-rebind.sh
             udev/ *.rules · systemd/ *.service
             networkmanager/ 99-teleprompter[-camera]
+            gnome-extension/ teleprompter-focus@…    (window activation)
 docs/       CAMERA.md
 tests/      loader.py, test_*.py
 .githooks/  pre-commit                               (secret-leak guard)
@@ -30,10 +33,18 @@ tests/      loader.py, test_*.py
 
 Cross-directory wiring to keep in mind when moving things:
 - `app/mirror-server.py` and `camera/camera-control.py` add `../lib` to
-  `sys.path` before `import teleprompter_config`.
+  `sys.path` before `import teleprompter_config`; `mirror-server.py` imports
+  `window_focus` from there too.
 - `bin/*.sh` source `../lib/config.sh`; `system/install.sh` substitutes
   `__PROJECT_DIR__` with the **repo root** (its own parent), so the baked
-  paths are `app/mirror-server.py`, `bin/open-cast.sh`, `camera/camera-control.py`.
+  paths are `app/mirror-server.py`, `bin/open-cast.sh`, `camera/camera-control.py`,
+  `bin/focus-shared.sh`.
+- `bin/focus-shared.sh` runs `lib/window_focus.py` directly — no server
+  involved, so the desktop action works whether or not a cast is running.
+- The GNOME extension UUID (`teleprompter-focus@teleprompter-mirror.local`)
+  appears in four places that must stay in sync: the extension directory name,
+  `EXTENSION_UUID` in `lib/window_focus.py`, `EXT_UUID` in `system/install.sh`
+  and `system/uninstall.sh`, and the path checked by `run-tests.sh`.
 
 ### Configuration
 
@@ -77,7 +88,8 @@ Keep the three in sync.
   to viewer resolution before encoding to reduce VP8 CPU load. Optional crop
   mode: click "Crop" to draw a rectangle and stream only that region via canvas.
   Uses `replaceTrack()` to switch between direct and cropped streams without
-  reconnecting. Crop adds a canvas step to the pipeline; when disabled, the
+  reconnecting. A "Focus Shared" button and a "choose shared window…" picker
+  raise the window being mirrored (see *Focusing the shared window*). Crop adds a canvas step to the pipeline; when disabled, the
   stream goes direct (no extra latency). Page title reflects connection state.
   A connection attempt owns its peer and AbortController; stale asynchronous
   results cannot modify a replacement peer. A retry task belongs to the capture
@@ -110,6 +122,94 @@ Keep the three in sync.
   `~/.config/systemd/user/` by `install.sh`. Auto-starts the mirror server at
   login (`WantedBy=graphical-session.target`), restarts on failure, stops on
   logout (`PartOf`). Uses `__PROJECT_DIR__` placeholder like the desktop entry.
+
+### Focusing the shared window
+
+With the cast app in front of you it is easy to lose the window it is
+mirroring. Raising that window again is a three-part problem, and the awkward
+part is not the raising:
+
+- **Nothing in the browser can do it.** Chrome's Conditional Focus API
+  (`CaptureController.setFocusBehavior()`) is only valid in the instant the
+  capture starts and throws afterwards, and `getDisplayMedia()` deliberately
+  tells the page nothing identifying about the window the portal handed over.
+- **Nothing outside gnome-shell can do it either.**
+  `org.gnome.Shell.Introspect.GetWindows` is allowlisted to the desktop
+  portals and answers `AccessDenied` to everyone else; `org.gnome.Shell.Eval`
+  needs unsafe-mode; `wmctrl`/`xdotool` are X11-only; and Chrome owns no
+  session bus name, so `org.freedesktop.Application.Activate` is not an
+  option. Hence the extension.
+- **Which window is shared is not reported anywhere**, so it is inferred.
+  Chrome focuses the captured surface when capture starts (the Conditional
+  Focus default, which `cast.html` asks for explicitly via `CaptureController`),
+  so the window that takes focus away from the cast window right after
+  `getDisplayMedia()` resolves is the captured one. `adoptSharedWindow()`
+  polls `/windows` for up to 2s looking for that change and remembers the
+  result; the picker is the manual override when it does not happen.
+
+Components:
+
+- `system/gnome-extension/teleprompter-focus@teleprompter-mirror.local/` —
+  ~80-line GNOME Shell extension exporting
+  `org.gnome.Shell.Extensions.TeleprompterFocus` with `List` (JSON, so the
+  Python side stays stdlib-only) and `Activate(id)`. Exported on gnome-shell's
+  own connection, so the D-Bus destination is `org.gnome.Shell`. `List`
+  returns `global.display.get_tab_list()` order — most recently used first —
+  with each window's id, title, `wm_class`, size, and focus state. `Activate`
+  calls `Main.activateWindow()`, which also switches workspace and is immune
+  to focus-stealing prevention because the compositor itself is raising it.
+- `lib/window_focus.py` — selection logic plus the D-Bus calls, which shell out
+  to `busctl --json=short` (the only stdlib-friendly way to speak D-Bus).
+  `select_window()` is pure and carries the matching rules; everything that
+  touches the bus is in `_call()`.
+- `app/mirror-server.py` — `GET /windows`, `GET|POST /focus/target`, `POST /focus`.
+  Handled *before* the signaling lock is taken: they wait on the shell and
+  must not stall an SDP exchange. Failures answer 409 with a JSON `error`,
+  because the usual cause ("no window matches") is desktop state, not a server
+  fault.
+- `bin/focus-shared.sh` — same thing without the server, for the desktop
+  entry's `Focus Shared Window` action and for a custom keyboard shortcut.
+- `system/extension-state.py` — enables/disables the extension by editing
+  gsettings, used by `install.sh` and `uninstall.sh`. Its `plan()` is pure and
+  tested.
+
+Lifetimes to preserve when touching this code:
+
+- **The focus bridge must never block casting.** `startCast()` kicks off the
+  baseline window lookup but does not await it: `getDisplayMedia()` needs the
+  click's transient activation, which expires after five seconds, so an
+  awaited call to a wedged shell would cost the user the ability to share at
+  all. Every focus request is bounded (`FOCUS_TIMEOUT_MS` in the page,
+  `CALL_TIMEOUT` in `window_focus.py`).
+- **Adoption owns its capture and the target generation it started with.**
+  `adoptSharedWindow()` re-checks `mine()` after every await, so Stop, a
+  replacement capture, and a manual pick all invalidate work in flight. This
+  is the same discipline the connection code follows, and `browser.test.js`
+  has a regression test per case.
+- **The target file has several writers** (the threaded server, the CLI), so
+  `save_target()` writes a sibling temporary file and `os.replace()`s it in.
+
+What the three capture types mean for the target:
+
+| `displaySurface` | Behavior |
+|---|---|
+| `browser` (a tab) | Chrome focuses the tab, so the **window hosting it** is adopted. Raising a specific tab is not possible from outside the browser — if you switch tabs in that window afterwards, Focus Shared brings up the window, not the tab. |
+| `window` | Adopted when the compositor actually raises it. On Wayland Chrome cannot raise another application's window, so this often falls through to the picker. |
+| `monitor` | Nothing specific is shared, so the existing target is left alone — "the window I keep losing" is still a meaningful thing to raise while sharing a whole screen. No auto-adoption, no prompt. |
+
+Matching rules (`select_window`), strongest first: a remembered **window id**
+(plus agreeing class, since ids are per-session) pins one exact window — this
+is what makes a choice stick when several browser windows share a class; then
+class plus exact title; then class alone. A remembered target always wins over
+the `TELEPROMPTER_FOCUS_MATCH` pattern. Titles are only ever a bonus: call
+windows rename themselves constantly, and a browser window is named after
+whichever tab is active. Among equals, a window that is **not** currently
+focused wins — the cast page runs in a Chrome window, so it shares `wm_class`
+with a shared Chrome window and would otherwise re-focus itself.
+
+The remembered target lives in `~/.config/teleprompter-mirror/focus-target.json`
+rather than the page's `localStorage` so the cast button, the desktop action,
+and a keyboard shortcut all raise the same window.
 
 ### KVM switch automation
 
@@ -179,9 +279,13 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   and driver re-probe. Retries up to 3 times. Logs to `teleprompter-wifi`
   syslog tag. If the device dropped from sysfs entirely (EPROTO), logs a
   warning — physical replug is needed.
-- `install.sh` — Installs system hooks, desktop entry, and user service (run
-  with sudo). Substitutes `__USER__` and `__PROJECT_DIR__` placeholders with
-  runtime values so the source files contain no hardcoded paths or usernames.
+- `install.sh` — Installs system hooks, desktop entry, user service, and the
+  GNOME Shell extension (run with sudo). Substitutes `__USER__` and
+  `__PROJECT_DIR__` placeholders with runtime values so the source files
+  contain no hardcoded paths or usernames. The extension is copied into the
+  user's `~/.local/share/gnome-shell/extensions/` and enabled via
+  `gnome-extensions enable` plus `system/extension-state.py` (see the gotcha
+  below).
 - `uninstall.sh` — Removes all files installed by `install.sh` (including the
   user service — disables and stops it first).
 - `teleprompter-mirror.desktop` — Desktop entry template. Installed to
@@ -213,8 +317,17 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   `importlib` and puts `lib/` on `sys.path` so `import teleprompter_config`
   resolves.
 - Network/hardware code is kept at arm's length from logic so the pure parts are
-  testable: `_fix_mdns` (SDP rewriting) and `parse_device_descriptor` (camera
-  SSDP XML) take strings and return values, with no I/O.
+  testable: `_fix_mdns` (SDP rewriting), `parse_device_descriptor` (camera
+  SSDP XML), and `select_window` (window matching) take values and return
+  values, with no I/O.
+- `run-tests.sh` also parses the GNOME extension with `node --check` (Node 22
+  detects the ES module syntax). Without it a typo there only surfaces as
+  "extension failed to load" at the next login. The check is guarded by a
+  `-f` test because `test_run_tests.py` runs the script against a fixture tree
+  containing only `run-tests.sh`.
+- The extension's own behavior cannot be tested offline — it only runs inside
+  gnome-shell. The Python side of the bridge can be: point
+  `window_focus.BUS_NAME` at a stub service that exports the same interface.
 
 ## Key gotchas
 
@@ -242,6 +355,20 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 - The tablet's Wi-Fi can stay on when using USB tethering — the firewall naturally
   forces WebRTC media over USB. Wi-Fi UDP is blocked by the default zone, while
   USB is in the trusted zone. ICE tries both paths and selects USB.
+- A newly installed GNOME Shell extension is invisible to the running shell:
+  `gnome-extensions enable` answers "Extension does not exist", and
+  `org.gnome.Shell.Extensions.ReloadExtension` now returns
+  `NotSupported: ReloadExtension is deprecated and does not work`. On Wayland
+  the shell cannot be restarted in place either, so **a logout/login is
+  required** after installing or changing `teleprompter-focus@…`. That is why
+  `install.sh` also runs `system/extension-state.py`, which writes the
+  gsettings keys directly. Note it must clear `disabled-extensions` as well:
+  GNOME's schema says that key "takes precedence over the enabled-extensions
+  setting", so for an extension the user once switched off, adding it to the
+  enabled list alone reports success and changes nothing. While the extension is
+  absent, `busctl` reports `Object does not exist at path …`; `window_focus.py`
+  translates that (and the related unknown-interface/method errors) into an
+  actionable "install it and log out" message rather than a raw D-Bus error.
 - GStreamer's `pipewiresrc` cannot consume GNOME Shell's screencast portal
   streams on GNOME 49 / PipeWire 1.4.x. GNOME creates the screencast node
   with `object.register=false`, making it invisible to pipewiresrc's
@@ -376,6 +503,21 @@ This repo is public. Every commit is auditable. Follow these rules strictly.
   exists, so no explicit metrics are needed.
 - **Servers bind to localhost only** (`127.0.0.1`). The tablet reaches them via
   ADB reverse port forwarding. Never bind to `0.0.0.0` or a LAN address.
+- **Localhost is not a trust boundary against other pages.** Binding to
+  `127.0.0.1` keeps other machines out, but any site the user has open can
+  POST to the server: a cross-origin `fetch(..., {mode: 'no-cors'})` cannot
+  read the reply, yet the side effect still happens. `Handler._authorized()`
+  therefore requires (a) a `Host` header naming the loopback interface, which
+  blocks DNS rebinding — a name resolving to `127.0.0.1` would otherwise serve
+  our own pages under the attacker's origin and make every route readable to
+  them — and (b) on the acting and desktop-exposing routes, an `Origin` that
+  is one of ours. A missing `Origin` is allowed: browsers always send one on
+  POST, so those requests come from local tools, which already have the
+  session bus. Keep new routes behind this guard.
+- **`/windows` and `/focus` are reachable from the tablet** — ADB reverse
+  connections arrive from `127.0.0.1`, so they are indistinguishable from
+  local ones. Keep these endpoints to listing and raising windows that already
+  exist. Never let them launch, close, or send input to anything.
 - **USB tethering interfaces go in the `trusted` firewall zone** at runtime only
   (no `--permanent`). All other interfaces stay in their default restricted zones.
 - **Camera WiFi uses a dedicated adapter** (`wlan0`) with `never-default yes` so

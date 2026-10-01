@@ -5,6 +5,8 @@ set -euo pipefail
 
 TARGET_USER="${SUDO_USER:?Run with sudo, not as root directly}"
 TARGET_HOME="$(eval echo ~"$TARGET_USER")"
+# Keep in sync with EXTENSION_UUID in lib/window_focus.py and install.sh.
+EXT_UUID="teleprompter-focus@teleprompter-mirror.local"
 
 echo "Removing system hooks and desktop entry..."
 
@@ -34,5 +36,14 @@ rm -f /etc/NetworkManager/dispatcher.d/99-teleprompter-camera
 
 rm -f "$TARGET_HOME/.local/share/applications/teleprompter-mirror.desktop"
 runuser -u "$TARGET_USER" -- update-desktop-database "$TARGET_HOME/.local/share/applications" 2>/dev/null || true
+
+# Clear both gsettings lists rather than using `gnome-extensions disable`,
+# which only works for extensions the running shell already knows — a stale
+# UUID would otherwise be left behind when uninstalling before a relogin.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+runuser -u "$TARGET_USER" -- env XDG_RUNTIME_DIR="$XDG_DIR" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_DIR/bus" \
+    python3 "$SCRIPT_DIR/extension-state.py" disable "$EXT_UUID" 2>/dev/null || true
+rm -rf "$TARGET_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
 
 echo "Done. All Teleprompter Mirror system files removed."

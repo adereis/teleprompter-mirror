@@ -7,15 +7,50 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 # Shared config lives in ../lib; make it importable when run as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import teleprompter_config  # noqa: E402
+import window_focus  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent
 LAN_IPS = []
+
+# Binding to 127.0.0.1 keeps other machines out; it is not a trust boundary
+# against other *pages*. Any site the user has open can POST here, and a
+# rebound DNS name would even make our own pages same-origin with an attacker.
+LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_loopback_host(host):
+    """True when a Host header names this machine's loopback interface.
+
+    A missing Host is accepted: only HTTP/1.0 clients omit it, and a browser
+    never does, so there is no rebinding to protect against.
+    """
+    if not host:
+        return True
+    try:
+        return urllib.parse.urlsplit(f"//{host}").hostname in LOOPBACK_NAMES
+    except ValueError:
+        return False
+
+
+def _is_own_origin(origin, port):
+    """True when an Origin header is one of this server's own origins."""
+    parts = urllib.parse.urlsplit(origin)
+    if parts.scheme not in ("http", "https") or parts.path or parts.query:
+        return False
+    try:
+        hostname, declared = parts.hostname, parts.port
+    except ValueError:
+        return False  # unparseable port
+    if hostname not in LOOPBACK_NAMES:
+        return False
+    return (declared or (443 if parts.scheme == "https" else 80)) == port
 
 # Chrome replaces local IPs with mDNS UUIDs for privacy — tablets can't resolve them.
 _MDNS_RE = re.compile(
@@ -59,7 +94,33 @@ class Handler(BaseHTTPRequestHandler):
     _offer = None
     _answer = None
 
+    def _authorized(self, guarded):
+        """Reject requests another origin's page could have made.
+
+        Two checks. The Host header must name the loopback interface, which
+        stops DNS rebinding — without it, a name resolving to 127.0.0.1 would
+        serve our own pages under the attacker's origin, making every endpoint
+        readable to them. And on anything that acts (window focus, signaling),
+        an Origin must be ours: a cross-origin `fetch(..., {mode: 'no-cors'})`
+        cannot read the reply but its side effect still happens. Requests
+        without an Origin are allowed — browsers always send one on POST, so
+        those are local tools, which already have the session bus anyway.
+        """
+        if not _is_loopback_host(self.headers.get("Host")):
+            return False
+        origin = self.headers.get("Origin")
+        if guarded and origin:
+            return _is_own_origin(origin, self.server.server_address[1])
+        return True
+
+    def _forbidden(self):
+        self._respond(403, "application/json", json.dumps({"error": "forbidden"}))
+
     def do_GET(self):
+        # /windows and /focus/target expose the desktop, so they are guarded
+        # like the acting routes even though they only read.
+        if not self._authorized(self.path.startswith(("/windows", "/focus"))):
+            return self._forbidden()
         routes = {
             "/": ("redirect", "/cast"),
             "/cast": ("file", "cast.html", "text/html"),
@@ -69,6 +130,8 @@ class Handler(BaseHTTPRequestHandler):
             "/manifest.json": ("file", "manifest.json", "application/manifest+json"),
             "/offer": ("signal", "_offer"),
             "/answer": ("signal", "_answer"),
+            "/windows": ("focus", window_focus.list_windows),
+            "/focus/target": ("focus", lambda: window_focus.load_target() or {}),
         }
         route = routes.get(self.path)
         if not route:
@@ -92,10 +155,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._respond(200, "application/json", data.encode())
             else:
                 self._respond(204)
+        elif kind == "focus":
+            self._focus_response(route[1])
 
     def do_POST(self):
+        # Read first even when the request will be refused: leaving the body
+        # in the socket would desync the next request on a kept-alive
+        # connection.
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode()
+        if not self._authorized(guarded=True):
+            return self._forbidden()
+
+        # Handled before the signaling lock: these shell out to the session bus
+        # and must not stall an SDP exchange while they wait on the shell.
+        if self.path == "/focus":
+            return self._focus_response(window_focus.focus_shared)
+        if self.path == "/focus/target":
+            request = self._json_body(body)
+            if request is None:
+                return
+            return self._focus_response(
+                lambda: window_focus.remember(request.get("id")))
 
         with Handler._lock:
             if self.path == "/offer":
@@ -110,6 +191,33 @@ class Handler(BaseHTTPRequestHandler):
                 Handler._answer = None
                 return self._respond(200)
         self._respond(404)
+
+    def _json_body(self, body):
+        """Parse a JSON request body, answering 400 and returning None if bad."""
+        if not body.strip():
+            return {}
+        try:
+            request = json.loads(body)
+        except json.JSONDecodeError as err:
+            self._respond(400, "application/json", json.dumps({"error": str(err)}))
+            return None
+        if not isinstance(request, dict):
+            self._respond(400, "application/json",
+                          json.dumps({"error": "expected a JSON object"}))
+            return None
+        return request
+
+    def _focus_response(self, operation):
+        """Run a window_focus operation, reporting failures as JSON errors.
+
+        409 rather than 500: the usual failure is "no window matches", which
+        is about the desktop's state, not a broken server.
+        """
+        try:
+            result = operation()
+        except window_focus.FocusError as err:
+            return self._respond(409, "application/json", json.dumps({"error": str(err)}))
+        self._respond(200, "application/json", json.dumps(result))
 
     def _respond(self, code, content_type=None, body=None):
         self.send_response(code)

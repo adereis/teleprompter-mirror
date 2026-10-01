@@ -19,6 +19,8 @@ function harness(page, fetchImpl = async () => response()) {
   const element = () => ({
     style: {}, dataset: {}, classList: {add() {}, remove() {}},
     getContext: () => ({}), addEventListener() {},
+    children: [], append(...kids) { this.children.push(...kids); },
+    replaceChildren() { this.children = []; },
     querySelector() { return this.child ||= element(); }
   });
   class Peer {
@@ -48,13 +50,14 @@ function harness(page, fetchImpl = async () => response()) {
   };
   let timerId = 0;
   const context = vm.createContext({
-    console: {error() {}}, AbortController, DOMException,
+    console: {error() {}}, AbortController, AbortSignal, DOMException,
     BroadcastChannel: class {postMessage() {}}, RTCPeerConnection: Peer,
     document: {
       getElementById(id) {
         if (!elements.has(id)) elements.set(id, element());
         return elements.get(id);
       },
+      createElement: () => element(), createTextNode: value => ({value}),
       querySelector: () => element(), addEventListener() {}, body: element()
     },
     window: {
@@ -215,6 +218,89 @@ test('viewer retries network errors while waiting for a cast', async () => {
 
 test('all inline page scripts parse', () => {
   for (const page of ['cast.html', 'view.html', 'latency-test.html']) new vm.Script(script(page));
+});
+
+// ─── Adopting the shared window ──────────────────────────────────────────
+//
+// Adoption runs in the background after a capture starts, so a slow window
+// lookup must not be allowed to write a target that no longer applies.
+
+// Serve the focus routes, with /windows held open until the test releases it.
+function focusHarness({surface = 'window', focusedId = '2'} = {}) {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const windows = [{id: focusedId, title: 'Call', wm_class: 'zoom',
+                    width: 100, height: 100, focused: true, mru: 0}];
+  const h = harness('cast.html', async url => {
+    if (url === '/windows') { await held; return response(200, windows); }
+    if (url === '/focus') return response(200, windows[0]);
+    if (url === '/focus/target') return response(200, windows[0]);
+    return response();
+  });
+  h.release = () => { release(); return flush(); };
+  h.adopt = () => h.run(`
+    adoptionTask = new AbortController();
+    adoptSharedWindow(
+      {readyState: 'live', getSettings: () => ({displaySurface: '${surface}',
+                                                width: 100, height: 100})},
+      Promise.resolve('1'), fixtureCapture, adoptionTask);
+  `);
+  h.targetWrites = () => h.calls
+    .filter(call => call.url === '/focus/target' && call.options?.method === 'POST')
+    .map(call => JSON.parse(call.options.body).id);
+  return h;
+}
+
+test('adoption remembers the window that took focus from the cast window', async () => {
+  const h = focusHarness();
+  h.adopt();
+  await h.release();
+  assert.deepEqual(h.targetWrites(), ['2']);
+});
+
+test('a stopped capture cannot adopt a window afterwards', async () => {
+  const h = focusHarness();
+  h.adopt();
+  h.run('stopCast()');
+  await h.release();
+  assert.deepEqual(h.targetWrites(), []);
+});
+
+test('a replacement capture invalidates the previous adoption', async () => {
+  const h = focusHarness();
+  h.adopt();
+  h.run('stream = nextCapture');
+  await h.release();
+  assert.deepEqual(h.targetWrites(), []);
+});
+
+test('a manual pick is not overwritten by an adoption still in flight', async () => {
+  const h = focusHarness();
+  h.adopt();
+  await h.run("rememberAndFocus('9')");
+  await h.release();
+  assert.deepEqual(h.targetWrites(), ['9']);
+});
+
+test('sharing a whole screen leaves the target alone', async () => {
+  const h = focusHarness({surface: 'monitor'});
+  h.adopt();
+  await h.release();
+  await flush();
+  assert.deepEqual(h.targetWrites(), []);
+  assert.equal(h.calls.filter(call => call.url === '/windows').length, 0);
+});
+
+test('the picker offers the focused window too', async () => {
+  // /cast in an ordinary tab: the window hosting the shared tab is the
+  // focused one, and excluding it left nothing to choose.
+  const h = focusHarness();
+  const pending = h.run('showPicker()');
+  await h.release();
+  await pending;
+  assert.equal(h.run("document.getElementById('windowPicker').style.display"), 'flex');
+  assert.notEqual(h.run("document.getElementById('focusInfo').textContent"),
+                  'No windows to choose from.');
 });
 
 for (const name of ['NotAllowedError', 'AbortError']) {

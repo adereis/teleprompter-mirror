@@ -35,7 +35,7 @@ forwarding (set up automatically by `start-mirror.sh`).
 
 | Path | Purpose |
 |------|---------|
-| `/cast` | Share a window and stream it to the tablet (optional crop mode) |
+| `/cast` | Share a window and stream it to the tablet (optional crop mode, refocus the shared window) |
 | `/view` | Tablet viewer (mirrored, fullscreen, auto-reconnect) |
 | `/latency` | Visual latency measurement tool |
 
@@ -55,6 +55,7 @@ cp config.example.env ~/.config/teleprompter-mirror/config.env
 | `TELEPROMPTER_PORT` | `8047` | Signaling server port |
 | `TELEPROMPTER_BIND` | `127.0.0.1` | Server bind address (keep on localhost) |
 | `TELEPROMPTER_BROWSER` | `google-chrome` | Browser for the cast app window |
+| `TELEPROMPTER_FOCUS_MATCH` | *(empty)* | Fallback pattern for "Focus Shared Window" |
 | `TELEPROMPTER_CAMERA_CONNECTION` | `Camera-A6300` | NetworkManager profile for the camera AP |
 | `TELEPROMPTER_CAMERA_ENDPOINT` | `http://192.168.122.1:8080/sony` | Camera Remote API base URL |
 
@@ -65,6 +66,58 @@ file lives outside the repo (`~/.config`), so machine-specific values never get
 committed. Re-run `sudo ./system/install.sh` after changing
 `TELEPROMPTER_CAMERA_CONNECTION`, since that value is baked into the installed
 NetworkManager dispatcher.
+
+## Finding the shared window again
+
+With the mirror app in front of you it's easy to lose the window it's
+mirroring behind everything else. **Focus Shared** in the cast page sidebar
+raises it again.
+
+Starting a share usually sets the target by itself: the browser brings the
+captured tab or window to the front, and the app remembers whatever came
+forward. The sidebar always shows what Focus Shared will raise, and *choose
+shared window…* overrides it. Three cases are worth knowing:
+
+- **Sharing a Chrome tab** — the *window* holding that tab is remembered, and
+  that's the best anyone can do: nothing outside the browser can raise an
+  individual tab. If you switch to another tab in that window afterwards,
+  Focus Shared brings up the window with whatever tab you left showing.
+- **Sharing a window** — remembered automatically when the desktop actually
+  brings it forward. Wayland doesn't let Chrome raise another application's
+  window, so you'll often be asked to pick it from the list instead; that
+  choice sticks.
+- **Sharing a whole screen** — nothing in particular is being shared, so the
+  previous target is kept. Pick the window you keep losing (your call window,
+  usually) and Focus Shared still works the way you'd want.
+
+The same thing is available outside the app:
+
+- **From the launcher** — right-click "Teleprompter Mirror" in the dash or app
+  grid and choose **Focus Shared Window**.
+- **From a keyboard shortcut** — Settings → Keyboard → View and Customize
+  Shortcuts → Custom Shortcuts, with the command:
+  ```
+  /path/to/teleprompter-mirror/bin/focus-shared.sh
+  ```
+
+If you always share the same application, set `TELEPROMPTER_FOCUS_MATCH` to a
+pattern (for example `Meet|Zoom Meeting`) and it works without picking
+anything; it's matched case-insensitively against each window's title and
+application name.
+
+This needs the **Teleprompter Focus** GNOME Shell extension, which
+`system/install.sh` installs and enables. GNOME can't load a new extension
+into a running session, so **log out and back in** once after installing.
+Check it with:
+
+```bash
+gnome-extensions info teleprompter-focus@teleprompter-mirror.local
+```
+
+> Why an extension: Wayland has no `wmctrl`, and GNOME restricts window
+> listing to the desktop portals, so nothing outside the shell can raise a
+> window. The browser can't help either — a page is never told which window
+> the screen-share picker handed over.
 
 ## USB tethering
 
@@ -158,12 +211,14 @@ The cast page is configured for video call mirroring:
 ```
 app/        WebRTC cast web app + signaling server (mirror-server.py, *.html, assets)
 camera/     Sony A6300 control over the Camera Remote API (camera-control.py)
-lib/        shared config loaded by both the scripts and the Python tools
-bin/        user-facing launchers (start-mirror.sh, open-cast.sh)
+lib/        shared config loaded by both the scripts and the Python tools,
+            plus window_focus.py (raising the window being shared)
+bin/        user-facing launchers (start-mirror.sh, open-cast.sh, focus-shared.sh)
 system/     OS integration installed by system/install.sh:
-              udev/           USB device-detection rules
-              systemd/        services
-              networkmanager/ dispatcher hooks
+              udev/            USB device-detection rules
+              systemd/         services
+              networkmanager/  dispatcher hooks
+              gnome-extension/ window activation for "Focus Shared Window"
 docs/        supplementary docs (CAMERA.md)
 tests/       stdlib unit tests (run with ./run-tests.sh)
 ```
@@ -197,7 +252,8 @@ the standard library; development checks also require Node.js and ShellCheck
 ```
 
 It runs Python unit tests and JavaScript connection tests, byte-compiles the
-tools, and checks shell syntax and ShellCheck diagnostics. Any failed check
+tools, parses the GNOME extension, and checks shell syntax and ShellCheck
+diagnostics. Any failed check
 makes the command fail. The JavaScript tests use mocked browser APIs; verifying
 actual video capture and USB latency still requires the laptop and tablet.
 
