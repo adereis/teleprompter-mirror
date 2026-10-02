@@ -19,11 +19,18 @@ Usage:
     camera-control.py reconnect         # Wait for camera after WiFi drop, recover if reset
     camera-control.py start             # startRecMode + zoom restore, only if camera reset
     camera-control.py keepalive         # Poll camera every 10s to prevent WiFi idle kick
+
+Commands that move the lens or restart Smart Remote (zoom with a direction,
+refocus, reconnect, start) take an exclusive lock first, so two of them can
+never drive the motor at once. Read-only commands never take it.
 """
 
+import contextlib
+import fcntl
 import json
 import logging
 import math
+import os
 import socket
 import sys
 import time
@@ -68,6 +75,89 @@ class ZoomTimingError(RuntimeError):
     interactive `zoom set`) can retry or fail cleanly instead of trusting a
     duration that no longer maps to actual motor runtime.
     """
+
+
+# Two lens commands running at once is not a race over a variable — it is two
+# processes driving one motor. Timed zoom is the exposed part: zoom_timed
+# assumes the gap between its own start and stop is the motor's runtime, which
+# stops being true the moment another process interleaves its own start/stop
+# pair. A WiFi flap produces exactly that, because every `up` and
+# `dhcp4-change` spawns a recovery and a slow link makes each one outlive the
+# next event. Three concurrent restores were observed in the wild during a
+# five-flap minute, each independently reading a position the others were
+# already correcting, leaving the lens four steps off target. ZOOM_LATENCY_LIMIT
+# cannot catch this: it measures one caller's own round trips and sees nothing
+# of a second actuator. Serialize instead.
+
+
+class LensBusy(RuntimeError):
+    """Another process holds the lens lock; this invocation must not proceed."""
+
+
+def lock_path():
+    """Path to the lens lock file.
+
+    Under the same ~/.config directory as the project's other state rather
+    than XDG_RUNTIME_DIR, which is where a lock would normally belong: the NM
+    dispatcher runs this script through `runuser`, which sets HOME but leaves
+    XDG_RUNTIME_DIR unset, so a runtime-dir path would resolve one way for a
+    dispatcher-spawned recovery and another for a command typed in a terminal
+    — two lock files and no mutual exclusion between the two callers that most
+    need it. The file outliving a reboot costs nothing, because flock state
+    lives in the kernel rather than in the file's contents.
+    """
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "teleprompter-mirror" / "camera.lock"
+
+
+def actuates_lens(argv):
+    """True if this invocation can move the lens or restart Smart Remote.
+
+    Pure, so the lock's scope is pinned by tests rather than by reading main().
+    `zoom` with no direction only reports the current position and must stay
+    answerable while a recovery holds the lock; every form that can send
+    actZoom or startRecMode has to wait its turn.
+    """
+    if not argv:
+        return False
+    if argv[0] == "zoom":
+        return len(argv) > 1
+    return argv[0] in ("refocus", "reconnect", "start")
+
+
+def _lock_holder(fd):
+    """Best-effort description of the current holder, for the declined message."""
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        pid = os.read(fd, 32).decode(errors="replace").strip()
+    except OSError:
+        pid = ""
+    return f"pid {pid}" if pid.isdigit() else "another process"
+
+
+@contextlib.contextmanager
+def lens_lock(path=None):
+    """Hold the exclusive lens lock for the body, or raise LensBusy.
+
+    Non-blocking on purpose. A second recovery that queued behind the first
+    would act on a camera state it read minutes earlier, and would begin its
+    own timed zoom just as the holder finished one; declining immediately
+    leaves the outcome to the process already doing the work. The holder's pid
+    is written into the file so a declined run can name it.
+    """
+    path = lock_path() if path is None else Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise LensBusy(_lock_holder(fd)) from None
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        yield
+    finally:
+        os.close(fd)  # releases the flock, however the body exited
 
 
 def _init_logging():
@@ -469,24 +559,20 @@ def cmd_apis(endpoint):
         print(name)
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(0)
-
-    _init_logging()
-    cmd = sys.argv[1]
-    endpoint = DEFAULT_ENDPOINT
+def dispatch(argv, endpoint):
+    """Run one command. argv is sys.argv[1:], and the lens lock is already
+    held if actuates_lens(argv) said this command needs it."""
+    cmd = argv[0]
 
     if cmd == "discover":
         cmd_discover(endpoint)
     elif cmd == "zoom":
-        if len(sys.argv) < 3:
+        if len(argv) < 2:
             pos = get_zoom_position(endpoint)
             print(f"{pos}/100")
-            sys.exit(0)
-        direction = sys.argv[2]
-        movement = sys.argv[3] if len(sys.argv) > 3 else "1shot"
+            return
+        direction = argv[1]
+        movement = argv[2] if len(argv) > 2 else "1shot"
         cmd_zoom(endpoint, direction, movement)
     elif cmd == "refocus":
         cmd_refocus(endpoint)
@@ -503,6 +589,30 @@ def main():
     else:
         print(f"Unknown command: {cmd}")
         print(__doc__)
+        sys.exit(1)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(0)
+
+    _init_logging()
+    argv = sys.argv[1:]
+    endpoint = DEFAULT_ENDPOINT
+
+    if not actuates_lens(argv):
+        dispatch(argv, endpoint)
+        return
+
+    try:
+        with lens_lock():
+            dispatch(argv, endpoint)
+    except LensBusy as holder:
+        # Not a failure of the camera — someone else is already on it — but
+        # the requested move did not happen, so don't report success.
+        print(f"Lens busy: {holder} is already moving it. "
+              f"Skipping '{' '.join(argv)}'.")
         sys.exit(1)
 
 

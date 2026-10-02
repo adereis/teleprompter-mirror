@@ -302,6 +302,13 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   (zoom in+out to trigger AF-C), and status queries. No external deps (stdlib only).
   The camera's WiFi AP uses `192.168.122.0/24` — libvirt's default network was
   moved to `192.168.124.0/24` to avoid a subnet collision.
+  Commands that can actuate the lens or restart Smart Remote (`zoom` with a
+  direction, `refocus`, `reconnect`, `start`) take an exclusive `flock` on
+  `~/.config/teleprompter-mirror/camera.lock` for their whole run; read-only
+  commands (`status`, bare `zoom`, `keepalive`, `discover`, `apis`) never take
+  it and stay answerable during a recovery. `actuates_lens()` is pure and
+  decides which is which; `lens_lock()` does the locking. See the
+  concurrent-recovery gotcha below for why.
 
 ### Tests
 
@@ -430,6 +437,49 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   ended in a Reason 2/3 drop, then flat again 50→51 over the following 10h. (An
   earlier note that this field is stuck at a fixed 88 no longer holds — likely a
   prior driver version; verify on the running kernel before trusting old values.)
+- **There is no noise floor reading on this adapter.** `iw dev wlan0 survey
+  dump` exits 0 and prints nothing — `ath9k_htc` doesn't implement survey. That
+  removes the one measurement that cleanly separates "interference raised the
+  noise" from "attenuation lowered the signal", so use two fields together
+  instead. `beacon signal avg` is the attenuation probe: beacons leave the AP at
+  a fixed rate and power every 100 ms, so a drop there means the path got
+  lossier (geometry, polarization, an obstruction). `beacon loss` climbing
+  **while `beacon signal avg` holds steady** means beacons are being sent at
+  normal strength and still not arriving — collisions or noise. Also note that
+  ath9k reports signal relative to its own noise-floor calibration, so the dBm
+  figure is not an absolute power measurement and shouldn't be read as one.
+  A sampler for live experiments (`station dump` is read-only, adds no traffic):
+
+  ```bash
+  while :; do iw dev wlan0 station dump 2>/dev/null | awk -v t="$(date +%H:%M:%S)" '
+    $1=="signal:" {s=$2} $1=="signal"&&$2=="avg:" {a=$3}
+    $1=="beacon"&&$2=="signal" {b=$4} $1=="beacon"&&$2=="loss:" {l=$3}
+    $1=="rx"&&$2=="bitrate:" {rx=$3} $1=="tx"&&$2=="retries:" {q=$3}
+    END {if(s=="") printf "%s -- DOWN --\n",t;
+         else printf "%s sig=%-5s avg=%-5s beacon=%-5s loss=%-6s rx_mcs=%-6s retry=%s\n",t,s,a,b,l,rx,q}'
+    sleep 2; done
+  ```
+
+  Pair it with `iw event -t` in another terminal for reason codes with
+  timestamps.
+- **A third drop mode: a transient ~25 dB fade that recovers on its own.**
+  Distinct from the AP's inactivity kick and from camera power loss, and the
+  tell is `locally_generated=1` on the supplicant's disconnect — *our* side
+  stopped hearing the AP, rather than the AP kicking us. The reason code is
+  **also 4**, so the code alone cannot distinguish the two; read the flag.
+  Observed 2026-10-02 around a sit/stand desk movement: beacon loss started
+  storming at 15:44:02, 93 seconds before any disconnect; signal went -57 →
+  -82 → -86 dBm; five associate/drop cycles followed, with `getEvent` returning
+  `No route to host` (associated at L2, ARP failing); fully recovered to -59 dBm
+  on its own within about fifteen minutes. Two log lines mislead here —
+  `authentication timed out` appears but is interleaved with *successful*
+  authentications, so it does not imply the AP went off-air as it does in the
+  power-loss case, and `4-Way Handshake failed - pre-shared key may be
+  incorrect` is a degraded link losing handshake frames, never an actual PSK
+  problem. **Cause not established.** Desk-height multipath, a dongle or cable
+  rotating, USB 3 emissions near the dongle, and unrelated 2.4 GHz traffic all
+  remain open; deliberate raise/lower and motor-burst tests afterwards were
+  inconclusive. Don't record this as solved.
 - **Timed zoom control is only valid over a fast link.** `actZoom` is a
   fire-and-forget start/stop pair; `zoom_timed` runs the motor for the
   wall-clock gap between them, so it assumes each call round-trips in ~100ms.
@@ -447,6 +497,27 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   Missing or invalid zoom telemetry is an error, never an assumed position of 0.
   Recovery also exits nonzero for missing camera status, failed `startRecMode`,
   or exhausted zoom retries, so a failed recovery cannot look successful.
+- **A link flap can start several recoveries that then share one motor.** The
+  camera dispatcher spawns a recovery on every `up` and every `dhcp4-change`,
+  backgrounded, and a slow link makes each one outlive the next event. On
+  2026-10-02 a five-flap minute left three `camera-control.py` processes
+  restoring zoom simultaneously; each read a position the other two were
+  already correcting, and the lens landed at 58 instead of 54. The timed-zoom
+  guards above cannot see this — `ZOOM_LATENCY_LIMIT` measures one caller's own
+  round trips and knows nothing of a second actuator interleaving its
+  start/stop pair. Fix is `lens_lock()`: an exclusive, **non-blocking** `flock`
+  held for the whole command. Non-blocking matters — a queued recovery would
+  act on camera state it read minutes earlier, so declining and leaving the
+  outcome to the running holder is the correct answer. A declined run logs
+  `Lens busy: pid N …` and exits 1, so it can't be mistaken for work done.
+  The lock file is under `~/.config` rather than `XDG_RUNTIME_DIR`, where a
+  lock would normally belong: the dispatcher invokes the script through
+  `runuser`, which sets `HOME` but leaves `XDG_RUNTIME_DIR` unset (hence the
+  explicit `XDG_DIR` the dispatcher passes to its `systemctl --user` calls), so
+  a runtime-dir path would give dispatcher recoveries a different lock file
+  from the CLI's and no mutual exclusion at all. `flock` state lives in the
+  kernel, so the file outliving a reboot is harmless and a killed holder leaves
+  nothing stale behind.
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.

@@ -5,8 +5,11 @@ endpoint from the UPnP device descriptor XML is pure and worth pinning down —
 it's how the script finds the camera when SSDP succeeds.
 """
 
+import os
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import call, patch
 
 from loader import load_module
@@ -278,6 +281,78 @@ class ZoomTelemetryTest(unittest.TestCase):
                     with self.assertRaises(SystemExit) as error:
                         cam.get_zoom_position("EP")
                     self.assertEqual(error.exception.code, 1)
+
+
+class ActuatesLensTest(unittest.TestCase):
+    """Which commands take the lock. Read-only ones must stay answerable while
+    a recovery holds it — notably bare `zoom`, which only reports a position."""
+
+    def test_lens_moving_commands_lock(self):
+        for argv in (["zoom", "in"], ["zoom", "out", "3s"], ["zoom", "set"],
+                     ["zoom", "stop"], ["refocus"], ["reconnect"], ["start"]):
+            with self.subTest(argv=argv):
+                self.assertTrue(cam.actuates_lens(argv))
+
+    def test_read_only_commands_do_not_lock(self):
+        for argv in (["zoom"], ["status"], ["keepalive"], ["discover"],
+                     ["apis"], ["bogus"], []):
+            with self.subTest(argv=argv):
+                self.assertFalse(cam.actuates_lens(argv))
+
+
+class LensLockTest(unittest.TestCase):
+    """The lock exists because a WiFi flap can spawn several recoveries that
+    outlive each other, and three of them once drove the same motor at once.
+    flock is held per open file description, so a second acquisition conflicts
+    even from within this one process."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = Path(self.dir.name) / "nested" / "camera.lock"
+
+    def test_second_holder_is_declined_not_queued(self):
+        with cam.lens_lock(self.path):
+            with self.assertRaises(cam.LensBusy):
+                with cam.lens_lock(self.path):
+                    self.fail("second holder must not get the lock")
+
+    def test_declined_message_names_the_holder(self):
+        with cam.lens_lock(self.path):
+            with self.assertRaises(cam.LensBusy) as busy:
+                with cam.lens_lock(self.path):
+                    pass
+        self.assertEqual(str(busy.exception), f"pid {os.getpid()}")
+
+    def test_lock_is_released_on_normal_exit(self):
+        with cam.lens_lock(self.path):
+            pass
+        with cam.lens_lock(self.path):  # must not raise
+            pass
+
+    def test_lock_is_released_when_the_body_raises(self):
+        # A recovery that dies mid-restore (unreachable camera raises
+        # SystemExit) must not wedge every later recovery out of the lens.
+        with self.assertRaises(SystemExit):
+            with cam.lens_lock(self.path):
+                raise SystemExit(1)
+        with cam.lens_lock(self.path):  # must not raise
+            pass
+
+    def test_creates_the_directory_it_needs(self):
+        with cam.lens_lock(self.path):
+            self.assertTrue(self.path.exists())
+
+
+class LockPathTest(unittest.TestCase):
+    def test_lives_beside_the_other_project_state(self):
+        # Must not depend on XDG_RUNTIME_DIR: the NM dispatcher runs this
+        # script via `runuser`, which leaves that unset, so a runtime-dir path
+        # would give dispatcher recoveries a different lock from the CLI's.
+        env = {"XDG_CONFIG_HOME": "/xdg", "XDG_RUNTIME_DIR": "/run/user/1000"}
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(cam.lock_path(),
+                             Path("/xdg/teleprompter-mirror/camera.lock"))
 
 
 class ConfigWiringTest(unittest.TestCase):
