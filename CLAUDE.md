@@ -462,24 +462,50 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 
   Pair it with `iw event -t` in another terminal for reason codes with
   timestamps.
-- **A third drop mode: a transient ~25 dB fade that recovers on its own.**
-  Distinct from the AP's inactivity kick and from camera power loss, and the
-  tell is `locally_generated=1` on the supplicant's disconnect — *our* side
-  stopped hearing the AP, rather than the AP kicking us. The reason code is
-  **also 4**, so the code alone cannot distinguish the two; read the flag.
-  Observed 2026-10-02 around a sit/stand desk movement: beacon loss started
-  storming at 15:44:02, 93 seconds before any disconnect; signal went -57 →
-  -82 → -86 dBm; five associate/drop cycles followed, with `getEvent` returning
-  `No route to host` (associated at L2, ARP failing); fully recovered to -59 dBm
-  on its own within about fifteen minutes. Two log lines mislead here —
-  `authentication timed out` appears but is interleaved with *successful*
-  authentications, so it does not imply the AP went off-air as it does in the
-  power-loss case, and `4-Way Handshake failed - pre-shared key may be
-  incorrect` is a degraded link losing handshake frames, never an actual PSK
-  problem. **Cause not established.** Desk-height multipath, a dongle or cable
-  rotating, USB 3 emissions near the dongle, and unrelated 2.4 GHz traffic all
-  remain open; deliberate raise/lower and motor-burst tests afterwards were
-  inconclusive. Don't record this as solved.
+- **An RF fade and a wedged camera are two failures, and they are routinely
+  mistaken for one.** They arrive together and both leave a dead feed, so the
+  natural reading is "the camera broke and only a power cycle fixed it". The
+  2026-10-02 episode separates them, because the fade *outlived the reset*:
+
+  | | RF fade | Camera wedged |
+  |---|---|---|
+  | Symptom | signal collapses, beacons lost, link flaps | `NotReady`, HDMI "Connecting", no API answer |
+  | Power cycle | **does nothing** | the only fix (modes 3/4 above) |
+  | Recovery | on its own, link stays associated | needs `startRecMode` or a reset |
+
+  Timeline: beacon loss began storming at 15:44:02, 93 seconds before any
+  disconnect; signal went -57 → -82 → -86 dBm; five associate/drop cycles
+  followed with `getEvent` returning `No route to host` (associated at L2, ARP
+  failing). A camera power cycle at ~15:47 restored Smart Remote and
+  reachability but **left the signal at -80 dBm**, where it stayed for at
+  least eight more minutes. It returned to -57 dBm by 16:18 with no
+  disconnect, no reassociation and no second power cycle in any log, then held
+  -52 to -56 dBm for the following 2h+ on one unbroken association
+  (`connected time` confirms it). So the reset fixed the camera, not the link.
+  When diagnosing, establish which of the two you are looking at before
+  reaching for a remedy — and check `connected time` and the dispatcher's
+  `signal=` samples, which together show whether anything actually dropped.
+
+  The fade's tell is `locally_generated=1` on the supplicant's disconnect:
+  *our* side stopped hearing the AP rather than the AP kicking us. The reason
+  code is **also 4**, identical to the inactivity kick the keepalive already
+  fixed, so the code alone cannot distinguish them — read the flag. Two log
+  lines mislead here: `authentication timed out` appears but is interleaved
+  with *successful* authentications, so unlike the power-loss case it does not
+  mean the AP went off-air, and `4-Way Handshake failed - pre-shared key may
+  be incorrect` is a degraded link losing handshake frames, never a real PSK
+  problem. Treat the fade's *magnitude* with suspicion too — ath9k derives
+  reported dBm from its own periodic noise-floor calibration, which an
+  interference episode can skew, so part of a large apparent swing may be the
+  measurement rather than the signal.
+
+  **Cause not established.** Desk-height multipath, a dongle or cable rotating,
+  USB 3 emissions near the dongle, and unrelated 2.4 GHz traffic all remain
+  open. Deliberate desk raise/lower and motor-burst tests were inconclusive on
+  2026-10-02, as an earlier round was in 2026-09 — but note the 15:56–16:18
+  recovery window was never correlated against what was physically happening,
+  so "inconclusive" here means untested rather than refuted. Don't record this
+  as solved.
 - **Timed zoom control is only valid over a fast link.** `actZoom` is a
   fire-and-forget start/stop pair; `zoom_timed` runs the motor for the
   wall-clock gap between them, so it assumes each call round-trips in ~100ms.
