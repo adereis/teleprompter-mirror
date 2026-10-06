@@ -78,10 +78,15 @@ captured tab or window to the front, and the app remembers whatever came
 forward. The sidebar always shows what Focus Shared will raise, and *choose
 shared window…* overrides it. Three cases are worth knowing:
 
-- **Sharing a Chrome tab** — the *window* holding that tab is remembered, and
-  that's the best anyone can do: nothing outside the browser can raise an
-  individual tab. If you switch to another tab in that window afterwards,
-  Focus Shared brings up the window with whatever tab you left showing.
+- **Sharing a Chrome tab** — Focus Shared raises the *window* holding that
+  tab. Nothing outside the browser can raise an individual tab, so if you
+  switch to another tab in that window afterwards, the window comes up with
+  whatever tab you left showing. Dragging the shared tab into another window,
+  or out into a new one, is followed: the app recognizes the tab by its title
+  wherever it is the visible tab, and remembers its new window from then on.
+  The one move it can't follow is dragging the tab away and switching to
+  another tab in its new window before using Focus Shared — then it raises
+  the window the tab came from, and *choose shared window…* fixes it.
 - **Sharing a window** — remembered automatically when the desktop actually
   brings it forward. Wayland doesn't let Chrome raise another application's
   window, so you'll often be asked to pick it from the list instead; that

@@ -245,9 +245,10 @@ function focusHarness({surface = 'window', focusedId = '2'} = {}) {
                                                 width: 100, height: 100})},
       Promise.resolve('1'), fixtureCapture, adoptionTask);
   `);
-  h.targetWrites = () => h.calls
+  h.targetBodies = () => h.calls
     .filter(call => call.url === '/focus/target' && call.options?.method === 'POST')
-    .map(call => JSON.parse(call.options.body).id);
+    .map(call => JSON.parse(call.options.body));
+  h.targetWrites = () => h.targetBodies().map(body => body.id);
   return h;
 }
 
@@ -256,6 +257,23 @@ test('adoption remembers the window that took focus from the cast window', async
   h.adopt();
   await h.release();
   assert.deepEqual(h.targetWrites(), ['2']);
+});
+
+test('adopting a shared tab tells the server it is a tab', async () => {
+  // The server only follows a tab between windows when it knows the
+  // remembered title belongs to a tab.
+  const h = focusHarness({surface: 'browser'});
+  h.adopt();
+  await h.release();
+  assert.deepEqual(h.targetBodies(), [{id: '2', surface: 'browser'}]);
+});
+
+test('a manual pick pins a window rather than following a tab', async () => {
+  // The picked window may be showing some other tab, so its title is not
+  // known to be the shared tab's.
+  const h = focusHarness({surface: 'browser'});
+  await h.run("rememberAndFocus('9')");
+  assert.deepEqual(h.targetBodies(), [{id: '9'}]);
 });
 
 test('a stopped capture cannot adopt a window afterwards', async () => {

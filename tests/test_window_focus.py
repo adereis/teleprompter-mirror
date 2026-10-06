@@ -109,6 +109,72 @@ class SelectWindowTest(unittest.TestCase):
             window_focus.select_window([window(1, "zoom", "Zoom")], pattern="(")
 
 
+def tab_target(wid, title):
+    """A target adopted from a shared Chrome tab, last seen in window `wid`."""
+    return {"id": str(wid), "wm_class": "google-chrome", "title": title,
+            "surface": "browser"}
+
+
+class SharedTabTest(unittest.TestCase):
+    """A shared tab can be dragged between windows; the target follows it."""
+
+    def test_a_tab_dragged_into_another_window_is_found_there(self):
+        # Window 1 still exists but now shows another tab; the moved tab is
+        # the active one in window 2, which therefore carries its title.
+        windows = [window(1, "google-chrome", "Inbox - Google Chrome", mru=0),
+                   window(2, "google-chrome", "Meet - Google Chrome", mru=1)]
+        target = tab_target(1, "Meet - Google Chrome")
+        self.assertEqual(window_focus.select_window(windows, target=target)["id"], "2")
+
+    def test_a_tab_that_is_not_showing_stays_with_its_window(self):
+        # Switching tabs hides the title everywhere; the last window wins,
+        # exactly as it did before tabs were followed.
+        windows = [window(1, "google-chrome", "Inbox - Google Chrome", mru=1),
+                   window(2, "google-chrome", "Docs - Google Chrome", mru=0)]
+        target = tab_target(1, "Meet - Google Chrome")
+        self.assertEqual(window_focus.select_window(windows, target=target)["id"], "1")
+
+    def test_the_last_window_breaks_a_tie_between_equal_titles(self):
+        windows = [window(1, "google-chrome", "New Tab - Google Chrome", mru=0),
+                   window(2, "google-chrome", "New Tab - Google Chrome", mru=1)]
+        target = tab_target(2, "New Tab - Google Chrome")
+        self.assertEqual(window_focus.select_window(windows, target=target)["id"], "2")
+
+    def test_an_untitled_tab_matches_no_untitled_window(self):
+        windows = [window(1, "google-chrome", "Inbox", mru=1),
+                   window(2, "google-chrome", "", mru=0)]
+        target = tab_target(1, "")
+        self.assertEqual(window_focus.select_window(windows, target=target)["id"], "1")
+
+    def test_a_shared_window_is_still_pinned_by_id(self):
+        # Sharing a whole window captures that window, whatever it shows, so
+        # a matching title elsewhere must not pull the target away.
+        windows = [window(1, "google-chrome", "Inbox - Google Chrome", mru=0),
+                   window(2, "google-chrome", "Meet - Google Chrome", mru=1)]
+        target = {**tab_target(1, "Meet - Google Chrome"), "surface": "window"}
+        self.assertEqual(window_focus.select_window(windows, target=target)["id"], "1")
+
+    def test_follow_re_pins_a_tab_seen_in_another_window(self):
+        target = tab_target(1, "Meet - Google Chrome")
+        moved = window_focus.follow_tab(target, window(2, "google-chrome", "Meet - Google Chrome"))
+        self.assertEqual(moved, {**target, "id": "2"})
+
+    def test_follow_ignores_the_same_window(self):
+        target = tab_target(1, "Meet - Google Chrome")
+        self.assertIsNone(
+            window_focus.follow_tab(target, window(1, "google-chrome", "Meet - Google Chrome")))
+
+    def test_follow_never_re_pins_on_a_guess(self):
+        # A class-only match says nothing about where the tab went.
+        target = tab_target(1, "Meet - Google Chrome")
+        self.assertIsNone(
+            window_focus.follow_tab(target, window(2, "google-chrome", "Inbox - Google Chrome")))
+
+    def test_follow_ignores_window_targets(self):
+        target = {"id": "1", "wm_class": "google-chrome", "title": "Meet"}
+        self.assertIsNone(window_focus.follow_tab(target, window(2, "google-chrome", "Meet")))
+
+
 class FocusTest(unittest.TestCase):
     def setUp(self):
         self.activated = []
@@ -193,6 +259,18 @@ class RememberedTargetTest(unittest.TestCase):
         chosen = window_focus.select_window(windows, target=window_focus.load_target())
         self.assertEqual(chosen["id"], "3")
 
+    def test_remember_records_a_shared_tab(self):
+        windows = [window(7, "google-chrome", "Meet - Google Chrome")]
+        window_focus.remember("7", windows=windows, surface="browser")
+        self.assertEqual(window_focus.load_target(), tab_target(7, "Meet - Google Chrome"))
+
+    def test_remember_rejects_an_unknown_surface(self):
+        # A monitor is never a target, and anything else is a client bug.
+        for surface in ("monitor", "tab", ""):
+            with self.subTest(surface=surface), self.assertRaises(window_focus.FocusError):
+                window_focus.remember("7", windows=[window(7, "zoom", "Zoom")], surface=surface)
+        self.assertIsNone(window_focus.load_target())
+
     def test_remember_rejects_a_window_that_closed(self):
         with self.assertRaises(window_focus.FocusError):
             window_focus.remember("9", windows=[window(7, "zoom", "Zoom")])
@@ -242,6 +320,64 @@ class RememberedTargetTest(unittest.TestCase):
             thread.join(timeout=30)
         stop.set()
         self.assertEqual(failures, [])
+
+
+class FocusSharedTest(unittest.TestCase):
+    """focus_shared() against a real target file and a scripted shell."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "focus-target.json"
+        self.windows = []
+        self.activated = []
+        self.on_activate = lambda: None
+        for name, replacement in {
+            "state_path": lambda: self.path,
+            "list_windows": lambda: self.windows,
+            "activate_window": self.activate,
+        }.items():
+            self.addCleanup(setattr, window_focus, name, getattr(window_focus, name))
+            setattr(window_focus, name, replacement)
+
+    def activate(self, window_id):
+        self.activated.append(window_id)
+        self.on_activate()
+        return True
+
+    def test_a_moved_tab_is_raised_and_re_pinned(self):
+        # Re-pinning is what makes the next press work after the user switches
+        # to a different tab in the window the shared tab moved to.
+        window_focus.save_target(tab_target(1, "Meet - Google Chrome"))
+        self.windows = [window(1, "google-chrome", "Inbox - Google Chrome", mru=1),
+                        window(2, "google-chrome", "Meet - Google Chrome", mru=2)]
+        window_focus.focus_shared(cfg={})
+        self.assertEqual(self.activated, ["2"])
+        self.assertEqual(window_focus.load_target(), tab_target(2, "Meet - Google Chrome"))
+
+        self.windows[1]["title"] = "Docs - Google Chrome"
+        window_focus.focus_shared(cfg={})
+        self.assertEqual(self.activated, ["2", "2"])
+
+    def test_a_newer_target_survives_the_re_pin(self):
+        # A share started while the shell was raising the window adopts its
+        # own; writing the old target back would silently undo that choice.
+        window_focus.save_target(tab_target(1, "Meet - Google Chrome"))
+        self.windows = [window(1, "google-chrome", "Inbox - Google Chrome"),
+                        window(2, "google-chrome", "Meet - Google Chrome")]
+        newer = {"id": "9", "wm_class": "zoom", "title": "Zoom Meeting"}
+        self.on_activate = lambda: window_focus.save_target(newer)
+        window_focus.focus_shared(cfg={})
+        self.assertEqual(window_focus.load_target(), newer)
+
+    def test_a_shared_window_is_never_re_pinned(self):
+        target = {"id": "1", "wm_class": "google-chrome", "title": "Meet"}
+        window_focus.save_target(target)
+        self.windows = [window(1, "google-chrome", "Inbox", mru=1),
+                        window(2, "google-chrome", "Meet", mru=0)]
+        window_focus.focus_shared(cfg={})
+        self.assertEqual(self.activated, ["1"])
+        self.assertEqual(window_focus.load_target(), target)
 
 
 if __name__ == "__main__":

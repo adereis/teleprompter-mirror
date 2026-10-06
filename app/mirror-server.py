@@ -176,7 +176,8 @@ class Handler(BaseHTTPRequestHandler):
             if request is None:
                 return
             return self._focus_response(
-                lambda: window_focus.remember(request.get("id")))
+                lambda: window_focus.remember(request.get("id"),
+                                              surface=request.get("surface")))
 
         with Handler._lock:
             if self.path == "/offer":

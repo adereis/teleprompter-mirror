@@ -577,9 +577,12 @@ async function adoptSharedWindow(track, castWindowRequest, capture, task) {
     const focused = await focusedWindowId(task.signal);
     if (!mine()) return;
     if (focused && focused !== castWindow) {
+      // The surface tells the server whether the window's title right now is
+      // a shared tab's — it is, since Chrome just brought that tab forward —
+      // so the target can follow the tab if it is later moved to another window.
+      const body = JSON.stringify({id: focused, surface: settings.displaySurface});
       try {
-        await focusJSON('/focus/target', {method: 'POST', signal: task.signal,
-                                          body: JSON.stringify({id: focused})});
+        await focusJSON('/focus/target', {method: 'POST', signal: task.signal, body});
         if (!mine()) return;
         await refreshFocusTarget();
         return;
@@ -611,6 +614,7 @@ async function refreshFocusTarget(prefix) {
   const parts = [];
   if (prefix) parts.push(prefix);
   parts.push(name ? `Focus target: ${name}` : 'No focus target picked yet');
+  if (name && target.surface === 'browser') parts.push('follows the tab between windows');
   el.textContent = parts.join(' · ');
 }
 

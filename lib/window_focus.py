@@ -19,6 +19,8 @@ without a running shell; everything touching D-Bus sits in :func:`_call`.
 Standard library only — no external dependencies.
 """
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -34,6 +36,9 @@ OBJECT_PATH = "/org/gnome/Shell/Extensions/TeleprompterFocus"
 INTERFACE = "org.gnome.Shell.Extensions.TeleprompterFocus"
 EXTENSION_UUID = "teleprompter-focus@teleprompter-mirror.local"
 CALL_TIMEOUT = 5  # seconds to wait on the shell before giving up
+# The capture kinds a target may record, in the Screen Capture API's own
+# vocabulary (``displaySurface``). A whole monitor never becomes a target.
+SURFACES = ("browser", "window")
 
 _MISSING_EXTENSION_HINT = (
     f"The {EXTENSION_UUID} GNOME Shell extension is not answering. Install it "
@@ -105,15 +110,53 @@ def save_target(target, path=None):
         raise FocusError(f"Could not write {path}: {err}") from err
 
 
+@contextlib.contextmanager
+def _target_lock(path):
+    """Serialize every change to the target file at `path`, across processes.
+
+    Atomic replacement keeps readers safe, but not a read-modify-write: the
+    re-pin in :func:`focus_shared` must not write back a target that a new
+    share replaced while it was waiting on the shell. Blocking, unlike the
+    camera's lens lock, because it is held only around a file read and a
+    rename — never around a call into the shell — so a wait is momentary.
+    """
+    lock = path.with_name(f"{path.stem}.lock")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    except OSError as err:
+        raise FocusError(f"Could not open {lock}: {err}") from err
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # releases the flock, however the body exited
+
+
+def replace_target(expected, updated, path=None):
+    """Save `updated` only if the target is still `expected`.
+
+    Returns whether it was saved. A False is not an error: it means someone
+    chose a newer target in the meantime, and theirs is the one to keep.
+    """
+    path = state_path() if path is None else Path(path)
+    with _target_lock(path):
+        if load_target(path) != expected:
+            return False
+        save_target(updated, path)
+        return True
+
+
 def forget_target(path=None):
     """Drop the remembered target. Returns True if a target was removed."""
     path = state_path() if path is None else Path(path)
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return False
-    except OSError as err:
-        raise FocusError(f"Could not remove {path}: {err}") from err
+    with _target_lock(path):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        except OSError as err:
+            raise FocusError(f"Could not remove {path}: {err}") from err
     return True
 
 
@@ -126,7 +169,7 @@ def _norm(value):
 def _target_score(window, target):
     """Rank a window against a remembered target; 0 means "not this one".
 
-    Three tiers, strongest first:
+    For a shared window, three tiers, strongest first:
 
     3. the exact window — matched by shell id, which is what makes picking one
        of several browser windows stick. Ids are per-session, so a stale one
@@ -139,6 +182,22 @@ def _target_score(window, target):
     and a browser window is titled after whichever tab is active — so an exact
     title is a bonus, never a requirement. The application class is the stable
     part and does the real filtering.
+
+    A shared *tab* (``surface == "browser"``) swaps the first two. Its id only
+    names the window the tab was in when it was adopted, and dragging the tab
+    into another window, or out into a new one, leaves that id on the old
+    window. What travels with the tab is its title: Chrome titles a window
+    after its active tab, adoption read the title just as Chrome brought the
+    shared tab forward, and a moved tab becomes the active tab of the window
+    it lands in. So a window showing that title is where the tab is now, and
+    the id only breaks ties:
+
+    4. showing the tab, in the window it was last seen in.
+    3. showing the tab.
+    2. the window it was last seen in — the tab is in there but not showing,
+       or its title changed. This is exactly the shared-window behavior, so
+       following can only change the outcome when the tab is visibly elsewhere.
+    1. same application.
     """
     wanted_class = _norm(target.get("wm_class"))
     if wanted_class:
@@ -148,9 +207,35 @@ def _target_score(window, target):
         # Nothing stable to match on; fall back to requiring the exact title.
         return 0
     wanted_id = target.get("id")
-    if wanted_id is not None and str(window.get("id")) == str(wanted_id):
+    same_id = wanted_id is not None and str(window.get("id")) == str(wanted_id)
+    same_title = _norm(window.get("title")) == _norm(target.get("title"))
+    if target.get("surface") == "browser":
+        # An empty title identifies nothing, so it never counts as the tab.
+        if same_title and _norm(target.get("title")):
+            return 4 if same_id else 3
+        return 2 if same_id else 1
+    if same_id:
         return 3
-    return 2 if _norm(window.get("title")) == _norm(target.get("title")) else 1
+    return 2 if same_title else 1
+
+
+def follow_tab(target, window):
+    """Return `target` re-pinned to `window` if its shared tab moved there.
+
+    Returns None when there is nothing to follow. Only a tab target follows,
+    and only on a title match — the one sign that the tab itself is showing
+    in `window`. A class-only match is a guess and must not overwrite the
+    last place the tab was actually seen. Re-pinning is what keeps the target
+    on the new window after the user switches to another tab in it.
+    """
+    if not target or target.get("surface") != "browser":
+        return None
+    title = _norm(target.get("title"))
+    if not title or _norm(window.get("title")) != title:
+        return None
+    if str(window.get("id")) == str(target.get("id")):
+        return None
+    return {**target, "id": str(window.get("id"))}
 
 
 def _pattern_score(window, regex):
@@ -266,15 +351,34 @@ def focus(target=None, pattern=None, windows=None):
 
 
 def focus_shared(cfg=None):
-    """Raise the remembered window, falling back to the configured pattern."""
+    """Raise the remembered window, falling back to the configured pattern.
+
+    A shared tab found in another window is re-pinned there (see
+    :func:`follow_tab`). The lookup and the raise can take seconds, so the
+    re-pin is conditional on the target being unchanged: a share started
+    meanwhile has adopted its own window, and that choice must stand.
+    """
     cfg = teleprompter_config.load() if cfg is None else cfg
-    return focus(target=load_target(), pattern=cfg.get("TELEPROMPTER_FOCUS_MATCH") or None)
+    target = load_target()
+    window = focus(target=target, pattern=cfg.get("TELEPROMPTER_FOCUS_MATCH") or None)
+    moved = follow_tab(target, window)
+    if moved:
+        replace_target(target, moved)
+    return window
 
 
-def remember(window_id, windows=None):
-    """Remember a listed window as the shared one and return it."""
+def remember(window_id, windows=None, surface=None):
+    """Remember a listed window as the shared one and return it.
+
+    `surface` is the capture's ``displaySurface``. ``"browser"`` makes this a
+    shared-tab target whose title is followed from window to window, so pass
+    it only when the window's title is known to be the tab's — that is,
+    from adoption, never from a manual pick.
+    """
     if window_id is None:
         raise FocusError("No window id given")
+    if surface is not None and surface not in SURFACES:
+        raise FocusError(f"Unknown capture surface: {surface!r}")
     windows = list_windows() if windows is None else windows
     wanted = str(window_id)
     window = next((w for w in windows if str(w.get("id")) == wanted), None)
@@ -282,9 +386,13 @@ def remember(window_id, windows=None):
         raise FocusError(f"Window {wanted} is no longer open")
     # The id pins this exact window for as long as it lives; class and title
     # are the fallback once it (or the session) has been restarted.
-    save_target({"id": wanted,
-                 "wm_class": window.get("wm_class", ""),
-                 "title": window.get("title", "")})
+    target = {"id": wanted,
+              "wm_class": window.get("wm_class", ""),
+              "title": window.get("title", "")}
+    if surface:
+        target["surface"] = surface
+    with _target_lock(state_path()):
+        save_target(target)
     return window
 
 

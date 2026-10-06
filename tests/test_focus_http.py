@@ -21,11 +21,17 @@ server = load_module("app/mirror-server.py", "mirror_server")
 class FocusRoutesTest(unittest.TestCase):
     def setUp(self):
         self.remembered = []
+        self.surfaces = []
         self.focused = []
         focus = server.window_focus
+
+        def remember(window_id, surface=None):
+            self.remembered.append(window_id)
+            self.surfaces.append(surface)
+
         for name, replacement in {
             "list_windows": lambda: [{"id": "7", "title": "Call", "wm_class": "zoom"}],
-            "remember": lambda window_id: self.remembered.append(window_id),
+            "remember": remember,
             "focus_shared": lambda: self.focused.append(True),
             "load_target": lambda: {"id": "7", "wm_class": "zoom", "title": "Call"},
         }.items():
@@ -62,6 +68,14 @@ class FocusRoutesTest(unittest.TestCase):
         status = self.request("/focus/target", "POST", '{"id": "7"}', {"Origin": origin})
         self.assertEqual(status, 200)
         self.assertEqual(self.remembered, ["7"])
+        self.assertEqual(self.surfaces, [None])
+
+    def test_the_capture_kind_reaches_the_target(self):
+        # Without it a shared tab is pinned to the window it started in.
+        origin = f"http://127.0.0.1:{self.port}"
+        self.request("/focus/target", "POST", '{"id": "7", "surface": "browser"}',
+                     {"Origin": origin})
+        self.assertEqual(self.surfaces, ["browser"])
 
     def test_localhost_origin_is_also_ours(self):
         # The tablet reaches the server as localhost through ADB reverse.

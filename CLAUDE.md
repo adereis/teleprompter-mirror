@@ -196,12 +196,18 @@ Lifetimes to preserve when touching this code:
   has a regression test per case.
 - **The target file has several writers** (the threaded server, the CLI), so
   `save_target()` writes a sibling temporary file and `os.replace()`s it in.
+  That protects readers but not a read-modify-write, and `focus_shared()`
+  does one: it re-pins a moved tab *after* a shell round trip that can take
+  seconds. So every writer holds `focus-target.lock` (a blocking `flock`,
+  held only around file I/O, never a shell call), and the re-pin goes through
+  `replace_target()`, which writes only if the target is still the one it
+  read. A share adopted meanwhile wins; `FocusSharedTest` pins this.
 
 What the three capture types mean for the target:
 
 | `displaySurface` | Behavior |
 |---|---|
-| `browser` (a tab) | Chrome focuses the tab, so the **window hosting it** is adopted. Raising a specific tab is not possible from outside the browser — if you switch tabs in that window afterwards, Focus Shared brings up the window, not the tab. |
+| `browser` (a tab) | Chrome focuses the tab, so the **window hosting it** is adopted, recorded with `surface: "browser"`. That window's title at that instant is the tab's own, and it is followed if the tab is dragged to another window (see below). Raising a specific tab is not possible from outside the browser — if you switch tabs in that window afterwards, Focus Shared brings up the window, not the tab. |
 | `window` | Adopted when the compositor actually raises it. On Wayland Chrome cannot raise another application's window, so this often falls through to the picker. |
 | `monitor` | Nothing specific is shared, so the existing target is left alone — "the window I keep losing" is still a meaningful thing to raise while sharing a whole screen. No auto-adoption, no prompt. |
 
@@ -214,6 +220,24 @@ windows rename themselves constantly, and a browser window is named after
 whichever tab is active. Among equals, a window that is **not** currently
 focused wins — the cast page runs in a Chrome window, so it shares `wm_class`
 with a shared Chrome window and would otherwise re-focus itself.
+
+A shared **tab** is the exception, and the reason is that a window id names a
+window, not a tab. Drag the tab into another window, or out into a new one,
+and the remembered id still points at the window it left. What travels with
+the tab is its title, because Chrome titles a window after its active tab
+and a moved tab becomes active where it lands. So for a `surface: "browser"`
+target the order is title+id, title, id, class. When no window shows the
+title, the result is exactly the shared-window order, so following can only
+change the outcome when the tab is visibly somewhere else. When it is found
+elsewhere, `follow_tab()` re-pins the id there, so the target stays on the
+new window after the user switches to another tab in it.
+
+Only adoption marks a target as a tab. A manual pick does not, even during a
+tab share, because the picked window may be showing a different tab — its
+title would then follow the wrong one. The gap that remains: if the tab is
+dragged away and its new window switches to another tab before anything
+looks, no title points at it, and Focus Shared raises the window it left.
+The picker is the recovery.
 
 The remembered target lives in `~/.config/teleprompter-mirror/focus-target.json`
 rather than the page's `localStorage` so the cast button, the desktop action,
