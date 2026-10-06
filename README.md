@@ -163,6 +163,11 @@ configured automatically. Or manually: `./bin/start-mirror.sh reconnect`.
 
 ## Camera control
 
+> Optional, and **currently in standby on my own setup** (2026-10-06) — the
+> camera runs fully manual with plain HDMI passthrough after one too many WiFi
+> drops. The code is current and re-arming is two commands; see
+> [docs/CAMERA.md](docs/CAMERA.md).
+
 The Sony A6300 camera can be controlled (zoom, refocus) from the command line
 while HDMI capture stays active. A dedicated USB WiFi adapter connects to the
 camera's WiFi AP, leaving the main WiFi free for internet.

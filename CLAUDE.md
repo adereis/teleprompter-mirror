@@ -310,6 +310,15 @@ disconnects/reconnects reset everything. System hooks automate recovery:
 
 ### Camera control
 
+**In standby since 2026-10-06.** The camera runs fully manual with plain HDMI
+passthrough; the WiFi control is switched off at
+`Camera-A6300`'s `connection.autoconnect`, which is what every other piece
+keys off (the dispatcher checks `CONNECTION_ID`, the keepalive unit is
+`static`). Nothing was uninstalled and everything below is current code — see
+*Manual passthrough mode* and *Re-arming WiFi control* in `docs/CAMERA.md`.
+Check whether the link is actually in use before debugging a camera symptom
+against it.
+
 - `camera-control.py` — Controls the Sony A6300 camera via Sony's Camera Remote
   API (JSON-RPC over WiFi). Requires the camera to be in Movie mode with Smart
   Remote Embedded running. A dedicated USB WiFi adapter (Atheros AR9271, `wlan0`)

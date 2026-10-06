@@ -1,5 +1,13 @@
 # Sony A6300 Camera Control from Linux
 
+> **Status: WiFi control is in standby as of 2026-10-06.** The camera now runs
+> fully manual with plain HDMI passthrough, after repeated link drops made the
+> remote control more trouble than the zoom was worth. Nothing here was
+> uninstalled and the code is current — see
+> [Manual passthrough mode](#manual-passthrough-mode) for the setup actually in
+> use, and [Re-arming WiFi control](#re-arming-wifi-control) to turn it back on.
+> The rest of this document describes the WiFi setup and remains accurate.
+
 ## Overview
 
 The Sony A6300 (ILCE-6300) can be remotely controlled from Linux via its
@@ -110,6 +118,62 @@ Switching the mode dial while Smart Remote is running exits the app and drops
 the WiFi connection. You must relaunch Smart Remote Embedded from the camera
 menu after changing modes.
 
+## Manual passthrough mode
+
+The setup currently in use: no WiFi, no remote control, just a clean HDMI feed
+from a camera configured by hand. Worth knowing even if you run the WiFi
+control, because it is the fallback when the link misbehaves during a meeting.
+
+**Exit Smart Remote Embedded — do not leave it idle.** This is the step that
+is easy to get wrong, because an abandoned Smart Remote is not a neutral
+state: while the app sits in `NotReady` it paints a "Connecting" screen over
+the HDMI output, so the feed stays broken until something calls
+`startRecMode`. Back out of the app (MENU → Application) so the camera returns
+to its ordinary Movie-mode live view, which is the clean feed.
+
+On the camera:
+
+| Setting | Value | Why |
+|---|---|---|
+| Mode dial | **Movie** | Still modes output a low-res LCD mirror |
+| Smart Remote Embedded | **exited** | An idle app overlays "Connecting" on HDMI |
+| HDMI Settings → HDMI Info. Display | **Off** | Keeps shooting data out of the feed |
+| Power Save Start Time | **Off** / longest | A sleeping camera kills the feed mid-call |
+| Exposure Mode (in Movie) | **Manual** | Stops the image hunting between shots |
+| Focus | **MF**, set once | Removes the reason the refocus nudge existed |
+| Zoom | set by hand | See the caveat below |
+
+**Caveat: the E PZ 16-50mm is a poor lens for a fixed framing.** Its zoom is
+motor-driven and even the ring is electronic rather than mechanically coupled,
+and the lens retracts when the camera powers off. Whether it returns to the
+focal length you set or to the wide end on power-up is **untested** — if it
+goes wide, a fixed framing means re-framing at every power-on. A manual zoom
+or a prime holds its position mechanically and would settle it. Test a power
+cycle before relying on this.
+
+## Re-arming WiFi control
+
+Standby is two settings, not an uninstall. The dispatcher, udev rules, systemd
+units and `camera-control.py` all stay in place; they simply never trigger,
+because every one of them keys off the camera NetworkManager profile
+activating. The dispatcher checks `CONNECTION_ID` before acting, and the
+keepalive unit is `static`, started only by the dispatcher's `up` event.
+
+To stand it down:
+
+```bash
+nmcli connection modify Camera-A6300 connection.autoconnect no
+nmcli connection down Camera-A6300        # if currently connected
+```
+
+To bring it back: set `connection.autoconnect yes`, plug the USB WiFi adapter
+back in, and relaunch Smart Remote Embedded on the camera. The profile
+auto-connects when the camera's AP appears and the dispatcher takes it from
+there.
+
+Keep the `Camera-A6300` profile rather than deleting it — it holds the SSID
+and PSK, which are not recorded anywhere else in this repo by design.
+
 ## Setup
 
 ### First-time setup
@@ -165,6 +229,10 @@ sudo virsh net-start default
 
 This persists across reboots. VMs need a DHCP renew or reboot after
 the change.
+
+Leave it moved even while the camera WiFi is in standby. The collision comes
+back the moment the camera AP is used again, and reverting costs every running
+VM a DHCP renew to buy nothing.
 
 ### USB control alternative (gphoto2)
 
