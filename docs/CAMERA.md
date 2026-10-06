@@ -77,6 +77,22 @@ The zoom range is 0-100, where 0 = fully wide (16mm) and 100 = fully tele
 (50mm). The `1shot` movement gives steps of roughly 9 positions. The
 `start`/`stop` movement gives smooth continuous zoom.
 
+**The motor has a minimum travel, not a minimum pulse width.** Timed
+`start`/`stop` pairs of 0.05s, 0.08s, 0.10s and 0.15s each moved the lens
+about 10 positions — the same distance a `1shot` step covers. Only above
+roughly 0.3s does travel become proportional to time (0.3s moved 12, 1.2s
+moves about 45). So the lens cannot be parked more precisely than about ±5,
+whatever the software does, and a short move says nothing about the motor's
+speed: reading one as 10 positions ÷ 0.05s would give 200 positions/second
+and mis-size every move after it.
+
+`camera-control.py zoom set` drives the lens to
+`TELEPROMPTER_CAMERA_ZOOM_TARGET` (default 50) in a closed loop, reading the
+real position back after each move. Set that key to the framing you shoot at:
+it is where an automatic recovery parks the lens after the camera resets.
+`zoom set SEC` keeps the older open-loop behavior for exploring where a given
+motor time ends up.
+
 ## Camera mode requirements
 
 The camera's physical mode dial affects what the API exposes:

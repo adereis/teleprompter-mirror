@@ -73,6 +73,30 @@ class LoadPrecedenceTest(unittest.TestCase):
             "brave-browser",
         )
 
+    def test_get_int_parses_a_number(self):
+        path = self._write("TELEPROMPTER_CAMERA_ZOOM_TARGET= 54 \n")
+        self.assertEqual(
+            cfg.get_int("TELEPROMPTER_CAMERA_ZOOM_TARGET", environ={}, path=path),
+            54,
+        )
+
+    def test_get_int_falls_back_to_the_built_in_default(self):
+        self.assertEqual(
+            cfg.get_int("TELEPROMPTER_CAMERA_ZOOM_TARGET", environ={},
+                        path="/nonexistent"),
+            int(cfg.DEFAULTS["TELEPROMPTER_CAMERA_ZOOM_TARGET"]),
+        )
+
+    def test_get_int_rejects_a_malformed_value(self):
+        # Quietly using the default instead would park a camera configured for
+        # 54 at 50 forever, with nothing anywhere explaining it.
+        for value in ("fifty", "", "50.5"):
+            with self.subTest(value=value):
+                path = self._write(f"TELEPROMPTER_CAMERA_ZOOM_TARGET={value}\n")
+                with self.assertRaises(ValueError):
+                    cfg.get_int("TELEPROMPTER_CAMERA_ZOOM_TARGET",
+                                environ={}, path=path)
+
     def _write(self, text):
         import tempfile
         fd = tempfile.NamedTemporaryFile("w", suffix=".env", delete=False)

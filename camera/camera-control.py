@@ -12,13 +12,14 @@ Usage:
     camera-control.py zoom in start     # Continuous zoom in (send 'stop' to end)
     camera-control.py zoom stop         # Stop continuous zoom
     camera-control.py zoom in 3s        # Smooth zoom in for 3 seconds
-    camera-control.py zoom set [SEC]    # Zoom out fully, then in for SEC (default: 1.2s)
+    camera-control.py zoom set          # Park the lens at TELEPROMPTER_CAMERA_ZOOM_TARGET
+    camera-control.py zoom set 1.2      # Zoom out fully, then in for 1.2s (open loop)
     camera-control.py refocus           # Nudge zoom in/out to trigger AF-C refocus
     camera-control.py status            # Show camera status (zoom pos, focus, etc.)
     camera-control.py apis              # List all available API methods
     camera-control.py reconnect         # Wait for camera after WiFi drop, recover if reset
     camera-control.py start             # startRecMode + zoom restore, only if camera reset
-    camera-control.py keepalive         # Poll camera every 10s to prevent WiFi idle kick
+    camera-control.py keepalive         # Poll every 10s; recover if the camera stays reset
 
 Commands that move the lens or restart Smart Remote (zoom with a direction,
 refocus, reconnect, start) take an exclusive lock first, so two of them can
@@ -50,8 +51,12 @@ SSDP_TIMEOUT = 3
 # Endpoint comes from config (env or ~/.config/teleprompter-mirror/config.env),
 # falling back to the A6300's fixed soft-AP address.
 DEFAULT_ENDPOINT = teleprompter_config.get("TELEPROMPTER_CAMERA_ENDPOINT")
-DEFAULT_ZOOM_DURATION = 1.2
 KEEPALIVE_INTERVAL = 10  # seconds between read-only getEvent polls
+
+# Sony error code returned by every actuating method while the camera is not in
+# rec mode. It means Smart Remote reset underneath us — a different failure from
+# a slow or unreachable link, and one that backing off cannot fix.
+ERR_NOT_AVAILABLE_NOW = 1
 
 # Timed zoom control assumes actZoom start/stop commands round-trip quickly: the
 # motor runs for the wall-clock gap between them. Over a degraded camera link
@@ -59,11 +64,55 @@ KEEPALIVE_INTERVAL = 10  # seconds between read-only getEvent polls
 # reconnect), so the motor runs uncontrolled and overshoots. Treat any actZoom
 # slower than this as "timing unreliable" and abort the move rather than trust it.
 ZOOM_LATENCY_LIMIT = 2.0  # seconds
-# A restore zooms fully out then in for DEFAULT_ZOOM_DURATION (~38/100 on the
-# E PZ 16-50mm). A final position far above that means the 'stop' command was
-# delayed and the lens over-ran (stranded at 100/100 in the wild). Reject such a
-# result and retry instead of reporting it as a successful restore.
+# A restore drives the lens to ZOOM_TARGET. A position far above that means the
+# 'stop' command was delayed and the lens over-ran (stranded at 100/100 in the
+# wild). Reject such a result and retry instead of reporting it as a successful
+# restore.
 ZOOM_RESTORE_CEILING = 75
+
+# Where a recovery parks the lens, and how precisely. Open-loop timed restores
+# did not repeat: the same 1.2s 'in' from zero landed at 54, 48 and 45 on three
+# consecutive recoveries, so every recovery quietly re-framed the shot. Drive to
+# a measured position instead.
+#
+# The E PZ 16-50mm has a minimum travel rather than a minimum pulse width:
+# measured commands of 0.05s, 0.08s, 0.10s and 0.15s each moved the lens about
+# 10 of 100 positions, so once the motor starts it completes a fixed increment
+# however briefly it was told to run. The lens therefore cannot be parked more
+# finely than that, and no amount of code will change it.
+ZOOM_MIN_INCREMENT = 10
+# Correcting an error smaller than half the minimum increment would overshoot
+# by more than it fixes, so stop there.
+ZOOM_TOLERANCE = ZOOM_MIN_INCREMENT // 2
+# Above this pulse width travel is proportional to time (0.3s moved 12, 1.2s
+# moves about 45). Only moves at least this long say anything about the motor's
+# speed: calibrating from a 0.05s pulse that moved 10 would read 200 units/s
+# and wreck every step after it.
+ZOOM_LINEAR_MIN_STEP = 0.4
+# Starting guess for the lens speed, in zoom units per motor-second. Only the
+# first step uses it; the loop re-measures as it goes, which matters more than
+# the constant's accuracy — a fixed figure that underestimates the lens by 2x
+# makes a proportional controller overshoot, reverse, and oscillate forever.
+ZOOM_RATE_GUESS = 45 / 1.2
+ZOOM_MIN_STEP = 0.05   # shortest pulse worth sending; anything less is the same
+ZOOM_MAX_STEP = 1.5    # cap a single open-loop leg
+ZOOM_MAX_STEPS = 12
+
+# A recovery re-checks the camera before releasing the lens lock, and repeats if
+# it reset again mid-recovery. Bounded, because a camera whose AP has wedged
+# needs a power cycle and no number of passes will reach it.
+RECOVERY_PASSES = 3
+STATUS_POLL_ATTEMPTS = 5
+STATUS_POLL_DELAY = 2  # seconds
+
+# The keepalive is the only process guaranteed to be running whenever camera
+# WiFi is up, so it doubles as the supervisor of last resort. It escalates only
+# after the camera has looked NotReady for this many consecutive polls — long
+# enough for a dispatcher-spawned recovery to take the lock and do the work —
+# and then no more often than the cooldown, so a camera that needs a physical
+# power cycle is not hammered.
+KEEPALIVE_NOTREADY_THRESHOLD = 3
+KEEPALIVE_RECOVERY_COOLDOWN = 120  # seconds
 
 log = logging.getLogger("camera-control")
 
@@ -74,6 +123,18 @@ class ZoomTimingError(RuntimeError):
     Raised by the timed-zoom helpers so callers (restore_zoom's backoff loop,
     interactive `zoom set`) can retry or fail cleanly instead of trusting a
     duration that no longer maps to actual motor runtime.
+    """
+
+
+class CameraReset(RuntimeError):
+    """The camera left rec mode underneath us — Smart Remote reset.
+
+    Distinct from ZoomTimingError on purpose. A slow link is answered by waiting
+    longer; a reset is answered by calling startRecMode again, and waiting does
+    nothing at all. Collapsing the two is what left the lens being zoomed at a
+    camera that had already reset: 'Not Available Now' looked like one more
+    transient failure, so the backoff loop spent its remaining attempts on a
+    remedy that could not work.
     """
 
 
@@ -111,12 +172,17 @@ def lock_path():
 
 
 def actuates_lens(argv):
-    """True if this invocation can move the lens or restart Smart Remote.
+    """True if this invocation must hold the lens lock for its whole run.
 
     Pure, so the lock's scope is pinned by tests rather than by reading main().
     `zoom` with no direction only reports the current position and must stay
     answerable while a recovery holds the lock; every form that can send
     actZoom or startRecMode has to wait its turn.
+
+    `keepalive` is false despite being able to recover, and deliberately so: it
+    runs for as long as camera WiFi is up, so holding the lock process-wide
+    would lock out every dispatcher recovery and every command typed in a
+    terminal for hours. It takes the lock around its escalation only.
     """
     if not argv:
         return False
@@ -230,8 +296,15 @@ def parse_device_descriptor(dd_xml):
     return model, endpoint
 
 
-def api_call(endpoint, method, params=None, version="1.0", exit_on_error=True):
-    """Make a JSON-RPC call to the camera."""
+def api_call(endpoint, method, params=None, version="1.0", exit_on_error=True,
+             detect_reset=False):
+    """Make a JSON-RPC call to the camera.
+
+    With detect_reset, a "Not Available Now" answer raises CameraReset instead
+    of being reported as a generic error. Callers that actuate the lens want
+    that distinction: it is the camera telling them Smart Remote is no longer
+    in rec mode, which needs startRecMode rather than another retry.
+    """
     payload = {
         "method": method,
         "params": params or [],
@@ -263,6 +336,8 @@ def api_call(endpoint, method, params=None, version="1.0", exit_on_error=True):
     if "error" in result:
         code, msg = result["error"]
         log.info("api %s -> ERR %.0fms [%s] %s", method, elapsed, code, msg)
+        if detect_reset and code == ERR_NOT_AVAILABLE_NOW:
+            raise CameraReset(f"{method}: {msg}")
         if not exit_on_error:
             return None
         print(f"Error {code}: {msg}")
@@ -316,8 +391,8 @@ def cmd_zoom(endpoint, direction, movement="1shot"):
         direction, movement = "in", "stop"
     try:
         if direction == "set":
-            duration = movement if movement != "1shot" else DEFAULT_ZOOM_DURATION
-            cmd_zoom_set(endpoint, _zoom_duration(duration))
+            cmd_zoom_set(endpoint,
+                         None if movement == "1shot" else _zoom_duration(movement))
             return
         if movement.endswith("s"):
             duration = _zoom_duration(movement[:-1])
@@ -327,14 +402,21 @@ def cmd_zoom(endpoint, direction, movement="1shot"):
     except (ValueError, ZoomTimingError) as error:
         print(f"Zoom failed: {error}")
         sys.exit(1)
+    except CameraReset as error:
+        print(f"Zoom failed: {error}")
+        print("The camera left rec mode. Run 'camera-control.py start' to recover.")
+        sys.exit(1)
     api_call(endpoint, "actZoom", [direction, movement])
     print(f"Zoom {direction} {movement}: OK")
 
 
 def _actzoom(endpoint, direction, phase):
-    """Send one actZoom command; return its round-trip latency in seconds."""
+    """Send one actZoom command; return its round-trip latency in seconds.
+
+    Raises CameraReset if the camera reports it is no longer in rec mode.
+    """
     t0 = time.monotonic()
-    api_call(endpoint, "actZoom", [direction, phase])
+    api_call(endpoint, "actZoom", [direction, phase], detect_reset=True)
     return time.monotonic() - t0
 
 
@@ -367,13 +449,22 @@ def zoom_timed(endpoint, direction, duration):
 
 
 def cmd_zoom_set(endpoint, duration=None):
-    """Zoom out fully, then zoom in for DEFAULT_ZOOM_DURATION."""
-    if duration is None:
-        duration = DEFAULT_ZOOM_DURATION
-    duration = _zoom_duration(duration)
+    """Park the lens at the configured target, or by timed move if given seconds.
+
+    With no duration this is the same closed-loop move a recovery makes, so
+    `zoom set` and an automatic recovery land in the same place — which is the
+    point of having a configured target at all. An explicit duration keeps the
+    old open-loop behavior for exploring where a given motor time ends up.
+    """
+    # Validate before the homing leg: an invalid duration must not move the
+    # lens at all, not strand it at 0 on the way to a move that cannot happen.
+    duration = None if duration is None else _zoom_duration(duration)
     try:
-        zoom_timed(endpoint, "out", 10)
-        pos = zoom_timed(endpoint, "in", duration)
+        if duration is None:
+            pos = zoom_to(endpoint, zoom_target())
+        else:
+            zoom_timed(endpoint, "out", 10)
+            pos = zoom_timed(endpoint, "in", duration)
     except ZoomTimingError as e:
         print(f"Camera link too slow to set zoom precisely: {e}")
         print("Try again once the WiFi link settles (check 'iw dev wlan0 link').")
@@ -428,29 +519,120 @@ def zoom_to_zero(endpoint):
     return True
 
 
-def restore_zoom(endpoint):
-    """Reset zoom to default with fibonacci-style backoff. Returns True on success.
+def zoom_target():
+    """The configured parking position for a recovery, validated.
 
-    Each attempt zooms fully out then in for DEFAULT_ZOOM_DURATION. The backoff
-    gives a still-settling link time to recover: a slow actZoom raises
-    ZoomTimingError, an unreachable camera raises SystemExit, and an implausibly
-    high final position (the 'stop' arrived late and the lens over-ran) is
-    rejected too — all three just trigger the next, longer retry rather than
-    leaving the lens parked at the wrong focal length.
+    Read on demand rather than at import so a mistyped config value only fails
+    the commands that move the lens; `status` and `keepalive` stay usable while
+    the user fixes it.
     """
+    target = teleprompter_config.get_int("TELEPROMPTER_CAMERA_ZOOM_TARGET")
+    if not 0 <= target <= 100:
+        raise ValueError(
+            f"TELEPROMPTER_CAMERA_ZOOM_TARGET must be 0-100, got {target}")
+    return target
+
+
+def _step_duration(error, rate):
+    """Motor seconds to cover `error` units of zoom at `rate`, clamped."""
+    return min(ZOOM_MAX_STEP, max(ZOOM_MIN_STEP, abs(error) / rate))
+
+
+def _close_enough(error):
+    """True when the remaining error is not worth another pulse.
+
+    The motor's minimum travel is about ZOOM_MIN_INCREMENT positions, so an
+    error below half of that cannot be improved: the correction would land
+    further from the target than staying put. Chasing it just alternates
+    between overshooting in each direction until the step budget runs out.
+    """
+    return abs(error) <= ZOOM_TOLERANCE
+
+
+def zoom_to(endpoint, target):
+    """Drive the lens to `target`/100 and return the position actually reached.
+
+    Closed loop on purpose. The old restore ran the motor for a fixed 1.2s from
+    zero and accepted wherever it stopped, which is why three consecutive
+    recoveries parked the same lens at 54, 48 and 45 — each one re-framing the
+    shot a little more. Here every move is followed by a real position read, so
+    the error shrinks instead of accumulating.
+
+    The loop also calibrates itself: each move reports how far the lens really
+    travelled for the time commanded, which is a direct measurement of the
+    motor's speed, so the next step is sized from the lens's own behavior
+    rather than from a constant that may be wrong for this lens or this
+    firmware. Without that, an underestimated speed overshoots the target,
+    reverses, overshoots again, and never settles.
+
+    Raises ZoomTimingError if the lens will not settle, and propagates
+    CameraReset untouched so the caller can restart rec mode.
+    """
+    if not zoom_to_zero(endpoint):
+        raise ZoomTimingError("could not home the lens to 0")
+    pos = 0
+    rate = ZOOM_RATE_GUESS
+    stalled = 0
+    for _ in range(ZOOM_MAX_STEPS):
+        error = target - pos
+        if _close_enough(error):
+            return pos
+        direction = "in" if error > 0 else "out"
+        duration = _step_duration(error, rate)
+        moved = zoom_timed(endpoint, direction, duration)
+        travelled = abs(moved - pos)
+        if travelled:
+            # Only long moves are proportional, so only they measure the motor.
+            if duration >= ZOOM_LINEAR_MIN_STEP:
+                rate = travelled / duration
+            stalled = 0
+        else:
+            # Two commanded moves that change nothing means the motor is not
+            # running — a mechanical limit, or a pulse too short to start it.
+            # Say so instead of spending the budget on the same no-op.
+            stalled += 1
+            if stalled >= 2:
+                raise ZoomTimingError(
+                    f"lens stopped responding at {pos}/100 (target {target}/100)")
+        pos = moved
+    raise ZoomTimingError(
+        f"lens settled at {pos}/100, {ZOOM_MAX_STEPS} steps short of {target}/100")
+
+
+def restore_zoom(endpoint, target=None):
+    """Park the lens at `target` with fibonacci-style backoff. True on success.
+
+    The backoff gives a still-settling link time to recover: a slow actZoom
+    raises ZoomTimingError, an unreachable camera raises SystemExit, and a
+    position above ZOOM_RESTORE_CEILING (the 'stop' arrived late and the lens
+    over-ran) is rejected too — all of which just trigger the next, longer retry
+    rather than leaving the lens at the wrong focal length.
+
+    A CameraReset is the one failure waiting cannot fix, so it is answered
+    rather than merely retried: the camera dropped out of rec mode underneath
+    us, so call startRecMode before the next attempt. Without this the loop
+    spent all five attempts pushing actZoom at a camera that rejected every one
+    of them with "Not Available Now", and reported a failed restore 50 seconds
+    later while the real remedy was one call away.
+    """
+    target = zoom_target() if target is None else target
     elapsed = 0
     for i, delay in enumerate(ZOOM_RETRY_DELAYS):
         time.sleep(delay)
         elapsed += delay
         attempt = f"attempt {i + 1}/{len(ZOOM_RETRY_DELAYS)}, {elapsed}s"
         try:
-            if not zoom_to_zero(endpoint):
-                raise ZoomTimingError("could not reach zoom 0")
-            pos = zoom_timed(endpoint, "in", DEFAULT_ZOOM_DURATION)
+            pos = zoom_to(endpoint, target)
             if pos > ZOOM_RESTORE_CEILING:
                 raise ZoomTimingError(f"overshot to {pos}/100 (stop delayed)")
             print(f"Zoom restored to {pos}/100 ({attempt})")
             return True
+        except CameraReset as e:
+            print(f"Camera left rec mode during restore ({attempt}): {e}")
+            if api_call(endpoint, "startRecMode", exit_on_error=False) is None:
+                print("startRecMode failed; retrying after backoff")
+            else:
+                print("Rec mode restarted — retrying zoom")
         except ZoomTimingError as e:
             print(f"Zoom not ready ({attempt}): {e}")
         except SystemExit:
@@ -503,6 +685,24 @@ def parse_camera_state(result):
     return status, zoom
 
 
+def read_status(endpoint, attempts=STATUS_POLL_ATTEMPTS, delay=STATUS_POLL_DELAY):
+    """Poll getEvent until the camera reports a status, or give up and return None.
+
+    Read-only and cheap, so it is safe to call while holding the lens lock —
+    which is exactly when it is needed, to find out whether the recovery that
+    just ran actually took.
+    """
+    for i in range(attempts):
+        if i:
+            time.sleep(delay)
+        result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
+        if result is not None:
+            status, _ = parse_camera_state(result)
+            if status is not None:
+                return status
+    return None
+
+
 def _recover_if_reset(endpoint, result):
     """Run startRecMode + zoom restore only if the camera reports NotReady.
 
@@ -511,18 +711,57 @@ def _recover_if_reset(endpoint, result):
     gated on the camera having actually reset (e.g. a power-loss drop). Restoring
     unconditionally clobbers a good zoom; over the still-weak link a reconnect
     rides in on, the timed restore can even drive the lens to 100/100.
+
+    When the camera has reset, recover in verified passes. The lens lock is
+    non-blocking, so every recovery that fires while this one runs is declined
+    and discarded; this process therefore has to be the one that finishes the
+    job. Checking the camera again before releasing the lock is what makes that
+    true. A WiFi flap storm broke the earlier single-pass version: it ran
+    startRecMode, spent 50 seconds failing to restore zoom across a dying link,
+    and turned away four later recoveries — including the one triggered by the
+    good re-association that ended the storm — then exited leaving the camera
+    NotReady with a healthy link and nothing scheduled to notice.
     """
     status, zoom = parse_camera_state(result)
     if status is None:
         print("Camera did not report its status; cannot decide whether to recover.")
         sys.exit(1)
-    if status == "NotReady":
-        api_call(endpoint, "startRecMode")
-        print("Camera was NotReady — recovering")
-        if not restore_zoom(endpoint):
-            sys.exit(1)
-    else:
+    if status != "NotReady":
         print(f"Camera status: {status} (zoom: {zoom}) — no recovery needed")
+        return
+    if not recover(endpoint):
+        sys.exit(1)
+
+
+def recover(endpoint):
+    """Bring a reset camera back, re-checking until it stays back. True if it did.
+
+    Each pass restarts rec mode, parks the lens, and then asks the camera what
+    state it is actually in. A pass that ends with the camera NotReady again
+    means it reset a second time mid-recovery — common during a flap storm — so
+    the work repeats rather than being reported as done.
+    """
+    for attempt in range(1, RECOVERY_PASSES + 1):
+        pass_no = f"pass {attempt}/{RECOVERY_PASSES}"
+        print(f"Camera was NotReady — recovering ({pass_no})")
+        if api_call(endpoint, "startRecMode", exit_on_error=False) is None:
+            print(f"startRecMode failed ({pass_no})")
+            continue
+        restored = restore_zoom(endpoint)
+        status = read_status(endpoint)
+        if status is None:
+            print(f"Camera stopped answering after recovery ({pass_no})")
+            continue
+        if status == "NotReady":
+            print(f"Camera reset again during recovery ({pass_no}) — repeating")
+            continue
+        if restored:
+            print(f"Recovery complete — camera {status}")
+            return True
+        print(f"Camera is {status} but the lens was not restored ({pass_no})")
+        return False
+    print(f"Recovery failed after {RECOVERY_PASSES} passes")
+    return False
 
 
 def cmd_start(endpoint):
@@ -539,16 +778,75 @@ def cmd_start(endpoint):
     _recover_if_reset(endpoint, result)
 
 
+def keepalive_should_escalate(notready_polls, since_last_recovery):
+    """Decide whether the keepalive should attempt a recovery itself.
+
+    Pure, so the escalation policy is pinned by tests rather than by reading
+    the polling loop. True once the camera has looked NotReady for long enough
+    that no dispatcher-spawned recovery is going to handle it, and not again
+    until the cooldown has passed.
+    """
+    return (notready_polls >= KEEPALIVE_NOTREADY_THRESHOLD
+            and since_last_recovery >= KEEPALIVE_RECOVERY_COOLDOWN)
+
+
 def cmd_keepalive(endpoint):
-    """Poll camera periodically to prevent WiFi inactivity disconnect."""
+    """Poll camera periodically to prevent WiFi inactivity disconnect.
+
+    Polling is read-only, which is the property that made a 10s interval safe
+    in the first place. The one exception is escalation: a recovery can fail
+    and exit, and nothing else then looks at the camera until the next DHCP
+    renewal roughly 27 minutes later — which is how a camera came to sit
+    NotReady behind a perfectly healthy link. This loop already has the state
+    needed to notice, so it recovers rather than only logging.
+
+    It takes the lens lock for the recovery alone, never for the poll: holding
+    it for the service's whole lifetime would block every dispatcher recovery
+    and every command typed in a terminal. Being declined is a normal outcome
+    here and means someone else is already on it.
+    """
     print(f"Keepalive started (interval {KEEPALIVE_INTERVAL}s)")
+    # A bad zoom target must not cost the user the keepalive itself: losing the
+    # poll means the camera AP starts kicking the client for inactivity, which
+    # is a worse failure than not being able to escalate. Report it loudly and
+    # keep polling, but decline to escalate rather than crash mid-recovery.
+    try:
+        zoom_target()
+        can_escalate = True
+    except ValueError as error:
+        print(f"Keepalive: escalation disabled, bad configuration: {error}")
+        can_escalate = False
+    notready_polls = 0
+    last_recovery = -KEEPALIVE_RECOVERY_COOLDOWN
     while True:
         time.sleep(KEEPALIVE_INTERVAL)
         result = api_call(endpoint, "getEvent", [False], exit_on_error=False)
         if result is None:
             print("keepalive: camera unreachable")
-        else:
+            notready_polls = 0
+            continue
+        status, _ = parse_camera_state(result)
+        if status != "NotReady":
             print("keepalive: OK")
+            notready_polls = 0
+            continue
+
+        notready_polls += 1
+        now = time.monotonic()
+        print(f"keepalive: camera NotReady ({notready_polls} consecutive)")
+        if not keepalive_should_escalate(notready_polls, now - last_recovery):
+            continue
+        if not can_escalate:
+            print("keepalive: would recover, but the zoom target is unusable")
+            continue
+        last_recovery = now
+        try:
+            with lens_lock():
+                print("keepalive: no one else is recovering — escalating")
+                if recover(endpoint):
+                    notready_polls = 0
+        except LensBusy as holder:
+            print(f"keepalive: recovery already running ({holder})")
 
 
 def cmd_apis(endpoint):
@@ -604,6 +902,15 @@ def main():
     if not actuates_lens(argv):
         dispatch(argv, endpoint)
         return
+
+    # Every lens-moving command can end up parking the lens at the configured
+    # target, so reject a malformed one here rather than part-way through a
+    # recovery with the lock held.
+    try:
+        zoom_target()
+    except ValueError as error:
+        print(f"Bad configuration: {error}")
+        sys.exit(1)
 
     try:
         with lens_lock():

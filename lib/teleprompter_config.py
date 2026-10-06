@@ -22,6 +22,7 @@ DEFAULTS = {
     "TELEPROMPTER_CAMERA_CONNECTION": "Camera-A6300",
     "TELEPROMPTER_CAMERA_BSSID": "",
     "TELEPROMPTER_CAMERA_ENDPOINT": "http://192.168.122.1:8080/sony",
+    "TELEPROMPTER_CAMERA_ZOOM_TARGET": "50",
 }
 
 
@@ -73,3 +74,20 @@ def load(environ=None, path=None):
 def get(key, environ=None, path=None):
     """Return a single configuration value."""
     return load(environ=environ, path=path).get(key)
+
+
+def get_int(key, environ=None, path=None):
+    """Return a configuration value as an int, or raise ValueError.
+
+    Deliberately strict rather than falling back to the default on a malformed
+    value. A mistyped number is a mistake the user wants to hear about at once:
+    silently substituting the default would let a camera configured to park its
+    lens at 54 keep parking it at 50, with nothing anywhere saying why.
+    """
+    raw = get(key, environ=environ, path=path)
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{key} must be an integer, got {raw!r} "
+            f"(check {config_path()})") from None

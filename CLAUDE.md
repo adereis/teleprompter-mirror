@@ -73,6 +73,14 @@ When adding a new tunable: add it to `DEFAULTS` in `lib/teleprompter_config.py`,
 the defaults block + export list in `lib/config.sh`, and `config.example.env`.
 Keep the three in sync.
 
+Numeric values go through `teleprompter_config.get_int()`, which raises on a
+malformed value rather than falling back to the default. Silently substituting
+would park a camera configured for 54 at 50 forever with nothing saying why.
+Callers decide *when* to read it: `camera-control.py` validates the zoom target
+in `main()` for lens-moving commands, but the keepalive only disables its
+escalation and keeps polling, because losing the poll causes AP inactivity
+kicks — a worse failure than not being able to recover.
+
 ### WebRTC mirror
 
 - `mirror-server.py` — Python HTTP server (stdlib only, no deps). Binds to
@@ -250,9 +258,18 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   Uses `CONNECTION_ID` env var to identify the connection.
 - `teleprompter-camera-keepalive.service` — systemd user service. Runs
   `camera-control.py keepalive`, which polls `getEvent` every 10s to prevent
-  the camera AP from kicking the client for WiFi inactivity. Read-only — no
-  state changes, no zoom commands. Not auto-started at login; the NM
-  dispatcher starts/stops it when camera WiFi connects/disconnects.
+  the camera AP from kicking the client for WiFi inactivity. Not auto-started
+  at login; the NM dispatcher starts/stops it when camera WiFi connects/
+  disconnects. The poll itself is read-only, which is what makes a 10s
+  interval safe. It is also the **recovery backstop**: a dispatcher recovery
+  can fail and exit, and nothing else then looks at the camera until the next
+  DHCP renewal ~27 min later, so after `KEEPALIVE_NOTREADY_THRESHOLD`
+  consecutive `NotReady` polls (~30s — long enough for a dispatcher recovery
+  to claim the lock) it runs `recover()` itself. It takes `lens_lock()` for
+  that escalation only, never for the service's lifetime, and declining
+  (`LensBusy`) is a normal outcome meaning someone else is already on it.
+  `KEEPALIVE_RECOVERY_COOLDOWN` keeps it from hammering a camera whose AP has
+  wedged and needs a physical power cycle.
 - `99-teleprompter-tether.rules` — udev rule. Detects the Samsung tablet connecting
   in tethering+ADB mode (`04e8:6864`) and triggers `teleprompter-adb-reverse.service`.
   Covers the case where the laptop disconnects and reconnects (suspend/resume, KVM
@@ -305,10 +322,20 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   Commands that can actuate the lens or restart Smart Remote (`zoom` with a
   direction, `refocus`, `reconnect`, `start`) take an exclusive `flock` on
   `~/.config/teleprompter-mirror/camera.lock` for their whole run; read-only
-  commands (`status`, bare `zoom`, `keepalive`, `discover`, `apis`) never take
-  it and stay answerable during a recovery. `actuates_lens()` is pure and
-  decides which is which; `lens_lock()` does the locking. See the
-  concurrent-recovery gotcha below for why.
+  commands (`status`, bare `zoom`, `discover`, `apis`) never take it and stay
+  answerable during a recovery. `actuates_lens()` is pure and decides which is
+  which; `lens_lock()` does the locking. `keepalive` is deliberately on the
+  read-only side despite being able to recover — it runs for hours, so it
+  takes the lock around its escalation only. See the concurrent-recovery
+  gotcha below for why any of this exists.
+
+  Recovery (`recover()`, shared by `start` and `reconnect`) runs in verified
+  passes: restart rec mode, park the lens, then **re-read the camera before
+  releasing the lock**. A pass that ends `NotReady` again means the camera
+  reset mid-recovery, so the work repeats rather than being reported as done.
+  Zoom restore drives to `TELEPROMPTER_CAMERA_ZOOM_TARGET` in a closed loop
+  (`zoom_to()`), measuring the motor's speed from each move rather than
+  trusting a constant.
 
 ### Tests
 
@@ -521,6 +548,27 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   attempts `stop` in `finally`, including a failed start or Ctrl-C during the
   hold. A disconnected link can still prevent the stop from reaching the lens.
   Missing or invalid zoom telemetry is an error, never an assumed position of 0.
+
+  **The restore is closed-loop, because open-loop timed moves don't repeat.**
+  Running the motor a fixed 1.2s from zero and accepting wherever it stopped
+  parked the same lens at 54, 48 and 45 on three consecutive recoveries — a
+  one-way ratchet that re-framed the shot a little each time. `zoom_to()`
+  reads the real position back after every move and corrects, so the error
+  shrinks instead of accumulating; four real runs afterward landed 45, 51, 45,
+  45 against a target of 50. It also **measures the motor's speed as it goes**
+  rather than trusting `ZOOM_RATE_GUESS`: a fixed figure that underestimates
+  the lens by 2x makes a proportional controller overshoot, reverse, overshoot
+  again and never settle.
+
+  Two measured facts constrain that loop (see *Zoom positions* in
+  `docs/CAMERA.md`). The motor has a minimum **travel**, not a minimum pulse
+  width — commands of 0.05s, 0.08s, 0.10s and 0.15s each moved the lens about
+  10 of 100 positions — so the lens cannot be parked more precisely than about
+  ±5 and `ZOOM_TOLERANCE` is derived from that, not chosen. And a short move
+  says nothing about speed: calibrating from one would read 10 ÷ 0.05s = 200
+  positions/second, so only moves of at least `ZOOM_LINEAR_MIN_STEP` update
+  the estimate.
+
   Recovery also exits nonzero for missing camera status, failed `startRecMode`,
   or exhausted zoom retries, so a failed recovery cannot look successful.
 - **A link flap can start several recoveries that then share one motor.** The
@@ -544,6 +592,35 @@ disconnects/reconnects reset everything. System hooks automate recovery:
   from the CLI's and no mutual exclusion at all. `flock` state lives in the
   kernel, so the file outliving a reboot is harmless and a killed holder leaves
   nothing stale behind.
+- **A non-blocking decline is only safe if the holder finishes the job, and on
+  2026-10-06 it didn't.** A six-reassociation storm (12:48:19–12:49:07) hit
+  while a recovery held the lens lock: it ran `startRecMode`, lost the link
+  mid-restore, and spent 50s in zoom backoff. Four later recoveries were
+  declined during that window — including the one triggered by the final,
+  *good* re-association at -57 dBm. The holder then exhausted its retries and
+  exited, leaving the camera `NotReady` behind a healthy link with nothing
+  scheduled to look at it for ~27 minutes. The decline had silently consumed
+  the one trigger that would have worked. Note this is not an argument for a
+  blocking lock — the reasoning above still holds. Three changes close it, and
+  all three are load-bearing:
+  - `recover()` re-reads camera state **before releasing the lock** and
+    repeats the pass if the camera reset again, so "done" is an honest claim.
+  - `restore_zoom` answers a `CameraReset` by calling `startRecMode` rather
+    than backing off (see the timed-zoom gotcha).
+  - the keepalive escalates when the camera stays `NotReady`, so a recovery
+    that failed and exited is not the last word.
+
+  Diagnosing a repeat: `journalctl -t teleprompter-camera` and look for
+  `Lens busy` lines clustered around a flap, followed by a `Zoom restore
+  failed` with no later recovery.
+- **"Not Available Now" (Sony error 1) means the camera left rec mode, not
+  that the link is slow.** The two need opposite responses: a slow link is
+  answered by waiting, a reset only by `startRecMode`. `restore_zoom`
+  originally caught both as one generic failure, so during the 2026-10-06
+  storm it spent its last 40 seconds pushing `actZoom` at a camera that
+  rejected every one — backing off from a condition that waiting cannot fix.
+  `api_call(..., detect_reset=True)` now raises `CameraReset` for that code,
+  and only `_actzoom` asks for it, so read-only callers keep the old behavior.
 - The camera must be in Movie mode for clean high-res HDMI output. Still/P mode
   outputs a low-resolution LCD mirror over HDMI.
 - Camera WiFi uses `ipv4.never-default yes` to avoid stealing the default route.
